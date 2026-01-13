@@ -49,6 +49,42 @@ class CombatSimulator extends EventTarget {
         };
     }
 
+    // 优化：预计算威胁值范围，避免重复计算
+    _selectTargetByThreat(aliveTargets) {
+        if (aliveTargets.length <= 1) {
+            return aliveTargets[0] || null;
+        }
+
+        let cumulativeThreat = 0;
+        const cumulativeRanges = new Array(aliveTargets.length);
+
+        for (let i = 0; i < aliveTargets.length; i++) {
+            const player = aliveTargets[i];
+            const playerThreat = player.combatDetails.combatStats.threat;
+            cumulativeRanges[i] = {
+                player: player,
+                rangeStart: cumulativeThreat,
+                rangeEnd: cumulativeThreat + playerThreat
+            };
+            cumulativeThreat += playerThreat;
+        }
+
+        const randomValueHit = Math.random() * cumulativeThreat;
+
+        // 二分查找优化
+        let left = 0, right = cumulativeRanges.length - 1;
+        while (left < right) {
+            const mid = (left + right) >> 1;
+            if (cumulativeRanges[mid].rangeEnd <= randomValueHit) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        return cumulativeRanges[left].player;
+    }
+
         addToWipeLogs(logEntry) {
         const { buffer, maxSize } = this.wipeLogs;
 
@@ -252,6 +288,71 @@ class CombatSimulator extends EventTarget {
         return this.simResult;
     }
 
+    // 按次数模拟地下城（用于并行模拟）
+    async simulateDungeonByCount(targetCount, progressCallback = null) {
+        if (!this.zone.isDungeon) {
+            throw new Error("simulateDungeonByCount only works for dungeon zones");
+        }
+
+        this.reset();
+
+        let ticks = 0;
+        let lastReportedProgress = 0;
+
+        let combatStartEvent = new CombatStartEvent(0);
+        this.eventQueue.addEvent(combatStartEvent);
+
+        // 模拟直到完成指定次数的地下城（成功+失败）
+        while ((this.zone.dungeonsCompleted + this.zone.dungeonsFailed) < targetCount) {
+            let nextEvent = this.eventQueue.getNextEvent();
+            await this.processEvent(nextEvent);
+
+            ticks++;
+            if (ticks == 1000) {
+                ticks = 0;
+
+                // 报告进度
+                if (progressCallback) {
+                    const currentTotal = this.zone.dungeonsCompleted + this.zone.dungeonsFailed;
+                    const progress = currentTotal / targetCount;
+                    if (progress > lastReportedProgress + 0.01) { // 每1%报告一次
+                        lastReportedProgress = progress;
+                        progressCallback({
+                            zone: this.zone.hrid,
+                            difficultyTier: this.zone.difficultyTier,
+                            progress: progress,
+                            completed: this.zone.dungeonsCompleted,
+                            failed: this.zone.dungeonsFailed
+                        });
+                    }
+                }
+            }
+        }
+
+        // 设置结果
+        this.simResult.isDungeon = true;
+        this.simResult.dungeonsCompleted = this.zone.dungeonsCompleted;
+        this.simResult.dungeonsFailed = this.zone.dungeonsFailed;
+        this.simResult.maxWaveReached = this.zone.dungeonSpawnInfo.maxWaves;
+        this.simResult.simulatedTime = this.simulationTime;
+
+        for (let i = 0; i < this.players.length; i++) {
+            this.simResult.setDropRateMultipliers(this.players[i]);
+            this.simResult.setManaUsed(this.players[i]);
+        }
+
+        // 设置 boss 信息
+        Object.entries(this.zone.dungeonSpawnInfo.fixedSpawnsMap).forEach(([wave, monsters]) => {
+            let waveName = "#" + wave.toString();
+            monsters.forEach(monster => {
+                waveName += ',' + monster.combatMonsterHrid;
+            });
+            this.simResult.bossSpawns.push(waveName);
+        });
+
+        return this.simResult;
+    }
+
     reset() {
         this.tempDungeonCount = 0;
         this.simulationTime = 0;
@@ -442,19 +543,7 @@ class CombatSimulator extends EventTarget {
         for (let i = 0; i < aliveTargets.length; i++) {
             let target = aliveTargets[i];
             if (!event.source.isPlayer && aliveTargets.length > 1) {
-                let cumulativeThreat = 0;
-                let cumulativeRanges = [];
-                aliveTargets.forEach(player => {
-                    let playerThreat = player.combatDetails.combatStats.threat;
-                    cumulativeThreat += playerThreat;
-                    cumulativeRanges.push({
-                        player: player,
-                        rangeStart: cumulativeThreat - playerThreat,
-                        rangeEnd: cumulativeThreat
-                    });
-                });
-                let randomValueHit = Math.random() * cumulativeThreat;
-                target = cumulativeRanges.find(range => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd).player;
+                target = this._selectTargetByThreat(aliveTargets);
             }
             let source = event.source;
 
@@ -474,10 +563,10 @@ class CombatSimulator extends EventTarget {
 
             if (attackResult.didHit && source.combatDetails.combatStats.curse > 0) {
                 const curseExpireTime = 15000000000;
-                let currentCurseEvent = this.eventQueue.getMatching((event) => event.type == CurseExpirationEvent.type && event.source == target);
+                let currentCurseEvent = this.eventQueue.getByTypeAndSource(CurseExpirationEvent.type, target);
                 let currentCurseAmount = 0;
                 if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;
-                this.eventQueue.clearMatching((event) => event.type == CurseExpirationEvent.type && event.source == target);
+                this.eventQueue.clearByTypeAndSource(CurseExpirationEvent.type, target);
 
                 let curseExpirationEvent = new CurseExpirationEvent(this.simulationTime + curseExpireTime, currentCurseAmount, target);
                 const curseBuff = {
@@ -495,8 +584,8 @@ class CombatSimulator extends EventTarget {
             }
 
             if (source.combatDetails.combatStats.fury > 0) {
-                let currentFuryEvent = this.eventQueue.getMatching((event) => event.type == FuryExpirationEvent.type && event.source == source);
-                this.eventQueue.clearMatching((event) => event.type == FuryExpirationEvent.type && event.source == source);
+                let currentFuryEvent = this.eventQueue.getByTypeAndSource(FuryExpirationEvent.type, source);
+                this.eventQueue.clearByTypeAndSource(FuryExpirationEvent.type, source);
 
                 const furyExpireTime = 15000000000;
                 const maxFuryStack = 5;
@@ -546,11 +635,11 @@ class CombatSimulator extends EventTarget {
 
             if (target.combatDetails.combatStats.weaken > 0) {
                 const weakenExpireTime = 15000000000;
-                let currentWeakenEvent = this.eventQueue.getMatching((event) => event.type == WeakenExpirationEvent.type && event.source == source);
+                let currentWeakenEvent = this.eventQueue.getByTypeAndSource(WeakenExpirationEvent.type, source);
                 let weakenAmount = 0;
                 if (currentWeakenEvent)
                     weakenAmount = currentWeakenEvent.weakenAmount;
-                this.eventQueue.clearMatching((event) => event.type == WeakenExpirationEvent.type && event.source == source);
+                this.eventQueue.clearByTypeAndSource(WeakenExpirationEvent.type, source);
                 let weakenExpirationEvent = new WeakenExpirationEvent(this.simulationTime + 15000000000, weakenAmount, source);
                 const weakenBuff = {
                     "uniqueHrid": "/buff_uniques/weaken",
@@ -725,7 +814,8 @@ class CombatSimulator extends EventTarget {
     }
 
     addNextAttackEvent(source) {
-        if (this.eventQueue.getMatching((event) => (event.type == AbilityCastEndEvent.type || event.type == AutoAttackEvent.type)&& event.source == source)) {
+        if (this.eventQueue.hasEventOfTypeAndSource(AbilityCastEndEvent.type, source) ||
+            this.eventQueue.hasEventOfTypeAndSource(AutoAttackEvent.type, source)) {
             return;
         }
 
@@ -946,11 +1036,15 @@ class CombatSimulator extends EventTarget {
     processEnrageTickEvent(event) {
         if (!this.enemies) return;
         const maxEnrageStack = 10;
-        this.enemies.filter((enemy) => enemy.combatDetails.currentHitpoints > 0).forEach((enemy) => {
+        // 优化：使用 for 循环替代 filter().forEach()
+        for (let i = 0; i < this.enemies.length; i++) {
+            const enemy = this.enemies[i];
+            if (enemy.combatDetails.currentHitpoints <= 0) continue;
+
             let nowStack = Math.min(maxEnrageStack, Math.floor(event.encounterTime / enemy.enrageTime));
 
             if (nowStack <= 0) {
-                return;
+                continue;
             }
 
             console.log(enemy.hrid, nowStack, " stack Enrage at ", (event.encounterTime / ONE_SECOND));
@@ -977,9 +1071,9 @@ class CombatSimulator extends EventTarget {
             };
             enemy.addBuff(enrageDamageBuff);
             enemy.addBuff(enrageAccuracyBuff);
-            
+
             this.simResult.maxEnrageStack = Math.max(this.simResult.maxEnrageStack, nowStack);
-        });
+        }
 
         let enrageTickEvent = new EnrageTickEvent(this.simulationTime + ENRAGE_TICK_INTERVAL, event.encounterTime + ENRAGE_TICK_INTERVAL);
         this.eventQueue.addEvent(enrageTickEvent);
@@ -991,22 +1085,25 @@ class CombatSimulator extends EventTarget {
         do {
             triggeredSomething = false;
 
-            this.players
-                .filter((player) => player.combatDetails.currentHitpoints > 0)
-                .forEach((player) => {
+            // 优化：使用 for 循环替代 filter().forEach()
+            for (let i = 0; i < this.players.length; i++) {
+                const player = this.players[i];
+                if (player.combatDetails.currentHitpoints > 0) {
                     if (this.checkTriggersForUnit(player, this.players, this.enemies)) {
                         triggeredSomething = true;
                     }
-                });
+                }
+            }
 
             if (this.enemies) {
-                this.enemies
-                    .filter((enemy) => enemy.combatDetails.currentHitpoints > 0)
-                    .forEach((enemy) => {
+                for (let i = 0; i < this.enemies.length; i++) {
+                    const enemy = this.enemies[i];
+                    if (enemy.combatDetails.currentHitpoints > 0) {
                         if (this.checkTriggersForUnit(enemy, this.enemies, this.players)) {
                             triggeredSomething = true;
                         }
-                    });
+                    }
+                }
             }
         } while (triggeredSomething);
     }
@@ -1092,7 +1189,8 @@ class CombatSimulator extends EventTarget {
         }
 
         for (const buff of consumable.buffs) {
-            let currentBuff = structuredClone(buff);
+            // 优化：使用浅拷贝替代 structuredClone，buff 对象只包含原始值
+            let currentBuff = Object.assign({}, buff);
             if (source.combatDetails.combatStats.drinkConcentration > 0 && consumable.catagoryHrid.includes("drink")) {
                 currentBuff.ratioBoost *= (1 + source.combatDetails.combatStats.drinkConcentration);
                 currentBuff.flatBoost *= (1 + source.combatDetails.combatStats.drinkConcentration);
@@ -1235,7 +1333,8 @@ class CombatSimulator extends EventTarget {
                 for (const buff of abilityEffect.buffs) {
                     if (ability.isSpecialAbility && buff.multiplierForSkillHrid && buff.multiplierPerSkillLevel > 0) {
                         let multiplier = 1.0 + source.combatDetails[buff.multiplierForSkillHrid.split('/')[2] + 'Level'] * buff.multiplierPerSkillLevel;
-                        let currentBuff = structuredClone(buff);
+                        // 优化：使用浅拷贝替代 structuredClone
+                        let currentBuff = Object.assign({}, buff);
                         currentBuff.flatBoost *= multiplier;
                         target.addBuff(currentBuff, this.simulationTime);
                     } else {
@@ -1336,19 +1435,7 @@ class CombatSimulator extends EventTarget {
             } else {
                 targets = targets.filter((unit) => unit && !avoidTarget.includes(unit.hrid) && unit.combatDetails.currentHitpoints > 0);
                 if (!source.isPlayer && targets.length > 0 && abilityEffect.targetType == "enemy") {
-                    let cumulativeThreat = 0;
-                    let cumulativeRanges = [];
-                    targets.forEach(player => {
-                        let playerThreat = player.combatDetails.combatStats.threat;
-                        cumulativeThreat += playerThreat;
-                        cumulativeRanges.push({
-                            player: player,
-                            rangeStart: cumulativeThreat - playerThreat,
-                            rangeEnd: cumulativeThreat
-                        });
-                    });
-                    let randomValueHit = Math.random() * cumulativeThreat;
-                    target = cumulativeRanges.find(range => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd).player;
+                    target = this._selectTargetByThreat(targets);
                     avoidTarget.push(target.hrid);
                 }
                 if (targets.length <= 0) {
@@ -1392,7 +1479,9 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.stunChance > 0 && Math.random() < (abilityEffect.stunChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isStunned = true;
                     target.stunExpireTime = this.simulationTime + abilityEffect.stunDuration;
-                    this.eventQueue.clearMatching((event) => (event.type == AutoAttackEvent.type || event.type == AbilityCastEndEvent.type || event.type == StunExpirationEvent.type) && event.source == target);
+                    this.eventQueue.clearByTypeAndSource(AutoAttackEvent.type, target);
+                    this.eventQueue.clearByTypeAndSource(AbilityCastEndEvent.type, target);
+                    this.eventQueue.clearByTypeAndSource(StunExpirationEvent.type, target);
                     let stunExpirationEvent = new StunExpirationEvent(target.stunExpireTime, target);
                     this.eventQueue.addEvent(stunExpirationEvent);
                 }
@@ -1400,8 +1489,8 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.blindChance > 0 && Math.random() < (abilityEffect.blindChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isBlinded = true;
                     target.blindExpireTime = this.simulationTime + abilityEffect.blindDuration;
-                    this.eventQueue.clearMatching((event) => event.type == BlindExpirationEvent.type && event.source == target)
-                    if (this.eventQueue.clearMatching((event) => event.type == AutoAttackEvent.type && event.source == target)) {
+                    this.eventQueue.clearByTypeAndSource(BlindExpirationEvent.type, target);
+                    if (this.eventQueue.clearByTypeAndSource(AutoAttackEvent.type, target)) {
                         // console.log("Blind " + (this.simulationTime / 1000000000));
                         this.addNextAttackEvent(target);
                     }
@@ -1412,8 +1501,8 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.silenceChance > 0 && Math.random() < (abilityEffect.silenceChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isSilenced = true;
                     target.silenceExpireTime = this.simulationTime + abilityEffect.silenceDuration;
-                    this.eventQueue.clearMatching((event) => event.type == SilenceExpirationEvent.type && event.source == target)
-                    if (this.eventQueue.clearMatching((event) => event.type == AbilityCastEndEvent.type && event.source == target)) {
+                    this.eventQueue.clearByTypeAndSource(SilenceExpirationEvent.type, target);
+                    if (this.eventQueue.clearByTypeAndSource(AbilityCastEndEvent.type, target)) {
                         // console.log("Silence " + (this.simulationTime / 1000000000));
                         this.addNextAttackEvent(target);
                     }
@@ -1423,10 +1512,10 @@ class CombatSimulator extends EventTarget {
 
                 if (attackResult.didHit && source.combatDetails.combatStats.curse > 0 && Math.random() < (100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     const curseExpireTime = 15000000000;
-                    let currentCurseEvent = this.eventQueue.getMatching((event) => event.type == CurseExpirationEvent.type && event.source == target);
+                    let currentCurseEvent = this.eventQueue.getByTypeAndSource(CurseExpirationEvent.type, target);
                     let currentCurseAmount = 0;
                     if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;
-                    this.eventQueue.clearMatching((event) => event.type == CurseExpirationEvent.type && event.source == target);
+                    this.eventQueue.clearByTypeAndSource(CurseExpirationEvent.type, target);
 
                     let curseExpirationEvent = new CurseExpirationEvent(this.simulationTime + curseExpireTime, currentCurseAmount, target);
                     const curseBuff = {
@@ -1446,11 +1535,11 @@ class CombatSimulator extends EventTarget {
                 if (target.combatDetails.combatStats.weaken > 0) {
                     const weakenExpireTime = 15000000000;
                     source.weakenExpireTime = this.simulationTime + weakenExpireTime;
-                    let currentWeakenEvent = this.eventQueue.getMatching((event) => event.type == WeakenExpirationEvent.type && event.source == source);
+                    let currentWeakenEvent = this.eventQueue.getByTypeAndSource(WeakenExpirationEvent.type, source);
                     let weakenAmount = 0;
                     if (currentWeakenEvent)
                         weakenAmount = currentWeakenEvent.weakenAmount;
-                    this.eventQueue.clearMatching((event) => event.type == WeakenExpirationEvent.type && event.source == source);
+                    this.eventQueue.clearByTypeAndSource(WeakenExpirationEvent.type, source);
                     let weakenExpirationEvent = new WeakenExpirationEvent(this.simulationTime + weakenExpireTime, weakenAmount, source);
                     const weakenBuff = {
                         "uniqueHrid": "/buff_uniques/weaken",
@@ -1569,7 +1658,7 @@ class CombatSimulator extends EventTarget {
         let reviveTarget = targets.find((unit) => unit && unit.combatDetails.currentHitpoints <= 0);
 
         if (reviveTarget) {
-            this.eventQueue.clearMatching((event) => event.type == PlayerRespawnEvent.type && event.hrid == reviveTarget.hrid);
+            this.eventQueue.clearByTypeAndHrid(PlayerRespawnEvent.type, reviveTarget.hrid);
 
             reviveTarget.removeExpiredBuffs(this.simulationTime);
 

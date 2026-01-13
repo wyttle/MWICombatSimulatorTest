@@ -266,7 +266,7 @@ class SimResult {
     // 添加时间序列数据点
     addTimeSeriesSnapshot(time, players) {
         this.timeSeriesData.timestamps.push(time);
-        
+
         players.forEach(player => {
             if (!this.timeSeriesData.players[player.hrid]) {
                 this.timeSeriesData.players[player.hrid] = {
@@ -276,13 +276,178 @@ class SimResult {
                     maxMp: []
                 };
             }
-            
+
             const playerData = this.timeSeriesData.players[player.hrid];
             playerData.hp.push(player.combatDetails.currentHitpoints);
             playerData.mp.push(player.combatDetails.currentManapoints);
             playerData.maxHp.push(player.combatDetails.maxHitpoints);
             playerData.maxMp.push(player.combatDetails.maxManapoints);
         });
+    }
+
+    // 合并另一个 SimResult 的数据（用于并行模拟结果合并）
+    merge(other) {
+        // 合并 deaths
+        for (const [key, value] of Object.entries(other.deaths)) {
+            this.deaths[key] = (this.deaths[key] || 0) + value;
+        }
+
+        // 合并 experienceGained
+        for (const [playerHrid, expData] of Object.entries(other.experienceGained)) {
+            if (!this.experienceGained[playerHrid]) {
+                this.experienceGained[playerHrid] = {
+                    stamina: 0, intelligence: 0, attack: 0,
+                    melee: 0, defense: 0, ranged: 0, magic: 0
+                };
+            }
+            for (const [stat, value] of Object.entries(expData)) {
+                this.experienceGained[playerHrid][stat] += value;
+            }
+        }
+
+        // 合并 encounters
+        this.encounters += other.encounters;
+
+        // 合并 attacks (深度嵌套对象)
+        for (const [sourceHrid, targets] of Object.entries(other.attacks)) {
+            if (!this.attacks[sourceHrid]) {
+                this.attacks[sourceHrid] = {};
+            }
+            for (const [targetHrid, abilities] of Object.entries(targets)) {
+                if (!this.attacks[sourceHrid][targetHrid]) {
+                    this.attacks[sourceHrid][targetHrid] = {};
+                }
+                for (const [ability, hits] of Object.entries(abilities)) {
+                    if (!this.attacks[sourceHrid][targetHrid][ability]) {
+                        this.attacks[sourceHrid][targetHrid][ability] = {};
+                    }
+                    for (const [hit, count] of Object.entries(hits)) {
+                        this.attacks[sourceHrid][targetHrid][ability][hit] =
+                            (this.attacks[sourceHrid][targetHrid][ability][hit] || 0) + count;
+                    }
+                }
+            }
+        }
+
+        // 合并 consumablesUsed
+        for (const [unitHrid, consumables] of Object.entries(other.consumablesUsed)) {
+            if (!this.consumablesUsed[unitHrid]) {
+                this.consumablesUsed[unitHrid] = {};
+            }
+            for (const [consumableHrid, count] of Object.entries(consumables)) {
+                this.consumablesUsed[unitHrid][consumableHrid] =
+                    (this.consumablesUsed[unitHrid][consumableHrid] || 0) + count;
+            }
+        }
+
+        // 合并 hitpointsGained
+        for (const [unitHrid, sources] of Object.entries(other.hitpointsGained)) {
+            if (!this.hitpointsGained[unitHrid]) {
+                this.hitpointsGained[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.hitpointsGained[unitHrid][source] =
+                    (this.hitpointsGained[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 manapointsGained
+        for (const [unitHrid, sources] of Object.entries(other.manapointsGained)) {
+            if (!this.manapointsGained[unitHrid]) {
+                this.manapointsGained[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.manapointsGained[unitHrid][source] =
+                    (this.manapointsGained[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 hitpointsSpent
+        for (const [unitHrid, sources] of Object.entries(other.hitpointsSpent)) {
+            if (!this.hitpointsSpent[unitHrid]) {
+                this.hitpointsSpent[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.hitpointsSpent[unitHrid][source] =
+                    (this.hitpointsSpent[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 manaUsed
+        for (const [unitHrid, abilities] of Object.entries(other.manaUsed)) {
+            if (!this.manaUsed[unitHrid]) {
+                this.manaUsed[unitHrid] = {};
+            }
+            for (const [abilityHrid, amount] of Object.entries(abilities)) {
+                this.manaUsed[unitHrid][abilityHrid] =
+                    (this.manaUsed[unitHrid][abilityHrid] || 0) + amount;
+            }
+        }
+
+        // 合并地下城统计
+        this.dungeonsCompleted += other.dungeonsCompleted;
+        this.dungeonsFailed += other.dungeonsFailed;
+        this.simulatedTime = (this.simulatedTime || 0) + (other.simulatedTime || 0);
+
+        // 合并 maxWaveReached (取最大值)
+        this.maxWaveReached = Math.max(this.maxWaveReached, other.maxWaveReached);
+
+        // 合并 maxEnrageStack (取最大值)
+        this.maxEnrageStack = Math.max(this.maxEnrageStack, other.maxEnrageStack);
+
+        // 合并 minDungenonTime (取最小非零值)
+        if (other.minDungenonTime > 0) {
+            if (this.minDungenonTime === 0 || other.minDungenonTime < this.minDungenonTime) {
+                this.minDungenonTime = other.minDungenonTime;
+            }
+        }
+
+        // 合并 timeSpentAlive
+        for (const otherEntry of other.timeSpentAlive) {
+            const existingIndex = this.timeSpentAlive.findIndex(e => e.name === otherEntry.name);
+            if (existingIndex !== -1) {
+                this.timeSpentAlive[existingIndex].timeSpentAlive += otherEntry.timeSpentAlive;
+                this.timeSpentAlive[existingIndex].count += otherEntry.count;
+            } else {
+                this.timeSpentAlive.push({ ...otherEntry });
+            }
+        }
+
+        // 合并 wipeEvents
+        this.wipeEvents = this.wipeEvents.concat(other.wipeEvents);
+
+        // 合并 playerRanOutOfMana (任一为 true 则为 true)
+        for (const [playerHrid, value] of Object.entries(other.playerRanOutOfMana)) {
+            if (value) {
+                this.playerRanOutOfMana[playerHrid] = true;
+            }
+        }
+
+        // 合并 playerRanOutOfManaTime
+        for (const [playerHrid, data] of Object.entries(other.playerRanOutOfManaTime)) {
+            if (!this.playerRanOutOfManaTime[playerHrid]) {
+                this.playerRanOutOfManaTime[playerHrid] = {
+                    isOutOfMana: false,
+                    startTimeForOutOfMana: 0,
+                    totalTimeForOutOfMana: 0
+                };
+            }
+            this.playerRanOutOfManaTime[playerHrid].totalTimeForOutOfMana += data.totalTimeForOutOfMana;
+        }
+
+        // 保留第一个结果的 dropRateMultiplier, rareFindMultiplier, combatDropQuantity, debuffOnLevelGap
+        // 这些值在同一配置下应该相同，不需要合并
+        if (Object.keys(this.dropRateMultiplier).length === 0) {
+            this.dropRateMultiplier = other.dropRateMultiplier;
+            this.rareFindMultiplier = other.rareFindMultiplier;
+            this.combatDropQuantity = other.combatDropQuantity;
+            this.debuffOnLevelGap = other.debuffOnLevelGap;
+        }
+
+        // bossSpawns 只需保留一份（相同配置下应该相同）
+        if (this.bossSpawns.length === 0) {
+            this.bossSpawns = other.bossSpawns;
+        }
     }
 }
 

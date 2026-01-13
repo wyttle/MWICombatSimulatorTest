@@ -82,6 +82,8 @@
     "simAllSolos": "Sim All Solos",
     "selectSolo": "Select Solo Target",
     "simDungeon": "Sim Dungeon",
+    "dungeonCount": "Dungeon Count",
+    "parallelCount": "Parallel Workers",
     "simulationSettings": "Simulation Settings",
     "allZonesData": "All Zones Data",
     "simulateAllZonesResults" : "Simulate All Zones Results",

@@ -30,6 +30,7 @@ let simStartTime = 0;
 
 let worker = new Worker(new URL("worker.js", import.meta.url));
 let multiWorker = new Worker(new URL("multiWorker.js", import.meta.url));
+let dungeonWorker = null; // 地下城并行模拟 Worker，延迟初始化
 let workerPool = [];
 
 
@@ -2767,15 +2768,37 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    // 初始化并行核心数滑块
+    // navigator.hardwareConcurrency 返回逻辑处理器数（包括超线程）
+    // 对于计算密集型任务，使用物理核心数更合理（约为逻辑处理器数的一半）
+    const parallelCountInput = document.getElementById('inputParallelCount');
+    const parallelCountDisplay = document.getElementById('parallelCountDisplay');
+    const logicalCores = navigator.hardwareConcurrency || 8;
+    const physicalCores = Math.max(1, Math.floor(logicalCores / 2)); // 估算物理核心数
+    const defaultCores = Math.max(1, physicalCores - 1); // 默认保留1个核心给系统
+    parallelCountInput.max = physicalCores;
+    parallelCountInput.value = defaultCores;
+    parallelCountDisplay.textContent = defaultCores;
+
+    parallelCountInput.addEventListener('input', function () {
+        parallelCountDisplay.textContent = parallelCountInput.value;
+    });
+
     simDungeonToggle.addEventListener('change', function () {
+        const dungeonCountRow = document.getElementById('dungeonCountRow');
+        const parallelCountRow = document.getElementById('parallelCountRow');
         if (simDungeonToggle.checked) {
             addPlayers();
             updatePlayersCheckbox(true);
             updateDifficultySelect(true);
+            dungeonCountRow.style.display = 'flex';
+            parallelCountRow.style.display = 'flex';
         } else {
             removePlayers();
             updatePlayersCheckbox(false);
             updateDifficultySelect(false);
+            dungeonCountRow.style.display = 'none';
+            parallelCountRow.style.display = 'none';
         }
         updatePlayerNames();
     });
@@ -2847,6 +2870,11 @@ function initSimulationControls() {
             multiWorker.terminate();
         }
         multiWorker = new Worker(new URL("multiWorker.js", import.meta.url));
+
+        if (dungeonWorker) {
+            dungeonWorker.terminate();
+            dungeonWorker = null;
+        }
 
         for (let worker of workerPool) {
             worker.worker.terminate();
@@ -2938,27 +2966,47 @@ function startSimulation(selectedPlayers) {
     let difficultySelect = document.getElementById("selectDifficulty");
     let simulationTimeInput = document.getElementById("inputSimulationTime");
     let simulationTimeLimit = Number(simulationTimeInput.value) * ONE_HOUR;
+    let dungeonCountInput = document.getElementById("inputDungeonCount");
+    let simulationCount = Number(dungeonCountInput.value) || 100;
+    let parallelCountInput = document.getElementById("inputParallelCount");
+    let parallelCount = Number(parallelCountInput.value) || 4;
     buttonStopSimulation.style.display = 'block';
     if (!simAllZonesToggle.checked && !simAllSoloToggle.checked) {
         let zoneHrid = zoneSelect.value;
         let difficultyTier = Number(difficultySelect.value);
         if (simDungeonToggle.checked) {
             zoneHrid = dungeonSelect.value;
+            // 地下城使用并行模拟（按次数）
+            let workerMessage = {
+                type: "start_dungeon_parallel",
+                players: playersToSim,
+                zone: { zoneHrid: zoneHrid, difficultyTier: difficultyTier },
+                simulationCount: simulationCount,
+                extra: extra,
+                parallelCount: parallelCount
+            };
+            simStartTime = Date.now();
+            if (!dungeonWorker) {
+                dungeonWorker = new Worker(new URL("dungeonWorker.js", import.meta.url));
+            }
+            dungeonWorker.onmessage = onWorkerMessage;
+            dungeonWorker.postMessage(workerMessage);
+        } else {
+            let workerMessage = {
+                type: "start_simulation",
+                workerId: Math.floor(Math.random() * 1e9).toString(),
+                players: playersToSim,
+                zone: { zoneHrid: zoneHrid, difficultyTier: difficultyTier },
+                simulationTimeLimit: simulationTimeLimit,
+                extra : extra
+            };
+            simStartTime = Date.now();
+            if (!worker) {
+                worker = new Worker(new URL("multiWorker.js", import.meta.url));
+            }
+            worker.onmessage = onWorkerMessage;
+            worker.postMessage(workerMessage);
         }
-        let workerMessage = {
-            type: "start_simulation",
-            workerId: Math.floor(Math.random() * 1e9).toString(),
-            players: playersToSim,
-            zone: { zoneHrid: zoneHrid, difficultyTier: difficultyTier },
-            simulationTimeLimit: simulationTimeLimit,
-            extra : extra
-        };
-        simStartTime = Date.now();
-        if (!worker) {
-            worker = new Worker(new URL("multiWorker.js", import.meta.url));
-        }
-        worker.onmessage = onWorkerMessage;
-        worker.postMessage(workerMessage);
     } else {
         let targetHrids = {};
 

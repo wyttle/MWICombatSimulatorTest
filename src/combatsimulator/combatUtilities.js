@@ -1,4 +1,45 @@
 class CombatUtilities {
+    // Pre-computed combat style lookup table for faster access
+    static _combatStyleMap = {
+        "/combat_styles/stab": "stab",
+        "/combat_styles/slash": "slash",
+        "/combat_styles/smash": "smash",
+        "/combat_styles/ranged": "ranged",
+        "/combat_styles/magic": "magic"
+    };
+
+    // Pre-computed damage type lookup table
+    static _damageTypeMap = {
+        "/damage_types/physical": {
+            amplify: "physicalAmplify",
+            resistance: "totalArmor",
+            penetration: "armorPenetration",
+            thornPower: "physicalThorns",
+            thornType: "physicalThorns"
+        },
+        "/damage_types/water": {
+            amplify: "waterAmplify",
+            resistance: "totalWaterResistance",
+            penetration: "waterPenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        },
+        "/damage_types/nature": {
+            amplify: "natureAmplify",
+            resistance: "totalNatureResistance",
+            penetration: "naturePenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        },
+        "/damage_types/fire": {
+            amplify: "fireAmplify",
+            resistance: "totalFireResistance",
+            penetration: "firePenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        }
+    };
+
     static getTarget(enemies) {
         if (!enemies) {
             return null;
@@ -47,93 +88,41 @@ class CombatUtilities {
     }
 
     static processAttack(source, target, abilityEffect = null) {
-        let combatStyle = abilityEffect
+        const combatStyle = abilityEffect
             ? abilityEffect.combatStyleHrid
             : source.combatDetails.combatStats.combatStyleHrid;
-        let damageType = abilityEffect ? abilityEffect.damageType : source.combatDetails.combatStats.damageType;
+        const damageType = abilityEffect ? abilityEffect.damageType : source.combatDetails.combatStats.damageType;
 
-        let sourceAccuracyRating = 1;
-        let sourceAutoAttackMaxDamage = 1;
-        let targetEvasionRating = 1;
-
-        switch (combatStyle) {
-            case "/combat_styles/stab":
-                sourceAccuracyRating = source.combatDetails.stabAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.stabMaxDamage;
-                targetEvasionRating = target.combatDetails.stabEvasionRating;
-                break;
-            case "/combat_styles/slash":
-                sourceAccuracyRating = source.combatDetails.slashAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.slashMaxDamage;
-                targetEvasionRating = target.combatDetails.slashEvasionRating;
-                break;
-            case "/combat_styles/smash":
-                sourceAccuracyRating = source.combatDetails.smashAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.smashMaxDamage;
-                targetEvasionRating = target.combatDetails.smashEvasionRating;
-                break;
-            case "/combat_styles/ranged":
-                sourceAccuracyRating = source.combatDetails.rangedAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.rangedMaxDamage;
-                targetEvasionRating = target.combatDetails.rangedEvasionRating;
-                break;
-            case "/combat_styles/magic":
-                sourceAccuracyRating = source.combatDetails.magicAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.magicMaxDamage;
-                targetEvasionRating = target.combatDetails.magicEvasionRating;
-                break;
-            default:
-                throw new Error("Unknown combat style: " + combatStyle);
+        // Use lookup table for combat style
+        const styleKey = this._combatStyleMap[combatStyle];
+        if (!styleKey) {
+            throw new Error("Unknown combat style: " + combatStyle);
         }
 
-        let sourceDamageMultiplier = 1;
-        let sourceResistance = 0;
-        let sourcePenetration = 0;
-        let targetResistance = 0;
-        let targetThornPower = 0;
-        let targetPenetration = 0;
-        let thornType;
+        const sourceDetails = source.combatDetails;
+        const targetDetails = target.combatDetails;
 
-        switch (damageType) {
-            case "/damage_types/physical":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.physicalAmplify;
-                sourceResistance = source.combatDetails.totalArmor;
-                sourcePenetration = source.combatDetails.combatStats.armorPenetration;
-                targetResistance = target.combatDetails.totalArmor;
-                targetThornPower = target.combatDetails.combatStats.physicalThorns;
-                targetPenetration = target.combatDetails.combatStats.armorPenetration;
-                thornType = "physicalThorns";
-                break;
-            case "/damage_types/water":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.waterAmplify;
-                sourceResistance = source.combatDetails.totalWaterResistance;
-                sourcePenetration = source.combatDetails.combatStats.waterPenetration;
-                targetResistance = target.combatDetails.totalWaterResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.waterPenetration;
-                thornType = "elementalThorns";
-                break;
-            case "/damage_types/nature":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.natureAmplify;
-                sourceResistance = source.combatDetails.totalNatureResistance;
-                sourcePenetration = source.combatDetails.combatStats.naturePenetration;
-                targetResistance = target.combatDetails.totalNatureResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.naturePenetration;
-                thornType = "elementalThorns";
-                break;
-            case "/damage_types/fire":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.fireAmplify;
-                sourceResistance = source.combatDetails.totalFireResistance;
-                sourcePenetration = source.combatDetails.combatStats.firePenetration;
-                targetResistance = target.combatDetails.totalFireResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.firePenetration;
-                thornType = "elementalThorns";
-                break;
-            default:
-                throw new Error("Unknown damage type: " + damageType);
+        const sourceAccuracyKey = styleKey + "AccuracyRating";
+        const sourceMaxDamageKey = styleKey + "MaxDamage";
+        const targetEvasionKey = styleKey + "EvasionRating";
+
+        let sourceAccuracyRating = sourceDetails[sourceAccuracyKey];
+        const sourceAutoAttackMaxDamage = sourceDetails[sourceMaxDamageKey];
+        const targetEvasionRating = targetDetails[targetEvasionKey];
+
+        // Use lookup table for damage type
+        const damageInfo = this._damageTypeMap[damageType];
+        if (!damageInfo) {
+            throw new Error("Unknown damage type: " + damageType);
         }
+
+        const sourceDamageMultiplier = 1 + sourceDetails.combatStats[damageInfo.amplify];
+        const sourceResistance = sourceDetails[damageInfo.resistance];
+        const sourcePenetration = sourceDetails.combatStats[damageInfo.penetration];
+        const targetResistance = targetDetails[damageInfo.resistance];
+        const targetThornPower = targetDetails.combatStats[damageInfo.thornPower];
+        const targetPenetration = targetDetails.combatStats[damageInfo.penetration];
+        const thornType = damageInfo.thornType;
 
         let hitChance = 1;
         let critChance = 0;
