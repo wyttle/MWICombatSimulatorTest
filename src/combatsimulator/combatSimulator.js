@@ -1537,8 +1537,8 @@ class CombatSimulator extends EventTarget {
                 }
 
                 if (source.combatDetails.combatStats.fury > 0) {
-                    let currentFuryEvent = this.eventQueue.getMatching((event) => event.type == FuryExpirationEvent.type && event.source == source);
-                    this.eventQueue.clearMatching((event) => event.type == FuryExpirationEvent.type && event.source == source);
+                    let currentFuryEvent = this.eventQueue.getByTypeAndSource(FuryExpirationEvent.type, source);
+                    this.eventQueue.clearByTypeAndSource(FuryExpirationEvent.type, source);
 
                     const furyExpireTime = 15000000000;
                     const maxFuryStack = 5;
