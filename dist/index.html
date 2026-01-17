@@ -1035,6 +1035,10 @@
                     <!-- #region Simulation Results -->
                     <div class="col-md-5">
                         <div class="row">
+                            <b data-i18n="common:simulationResults.teamDps">Team DPS</b>
+                        </div>
+                        <div id="teamDpsValue" class="mb-2">0</div>
+                        <div class="row">
                             <b data-i18n="common:simulationResults.killPerHour">Kills per hour</b>
                         </div>
                         <div id="simulationResultKills" class="mb-2"></div>
@@ -1449,6 +1453,25 @@
                                         <label class="form-check-label" for="simDungeonToggle" data-i18n="common:simDungeon">
                                             Sim Dungeon
                                         </label>
+                                    </div>
+                                    <div class="row g-2 align-items-center mt-2" id="dungeonCountRow" style="display: none;">
+                                        <div class="col-6">
+                                            <label for="inputDungeonCount" class="col-form-label text-nowrap" data-i18n="common:dungeonCount">Dungeon Count</label>
+                                        </div>
+                                        <div class="col-6">
+                                            <input type="number" id="inputDungeonCount" class="form-control form-control-sm" value="100" min="1" max="10000">
+                                        </div>
+                                    </div>
+                                    <div class="row g-2 align-items-center mt-2" id="parallelCountRow" style="display: none;">
+                                        <div class="col-6">
+                                            <label for="inputParallelCount" class="col-form-label text-nowrap" data-i18n="common:parallelCount">Parallel Workers</label>
+                                        </div>
+                                        <div class="col-4">
+                                            <input type="range" id="inputParallelCount" class="form-range" min="1" max="8" value="1">
+                                        </div>
+                                        <div class="col-2 text-center">
+                                            <span id="parallelCountDisplay" class="badge bg-primary">1</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

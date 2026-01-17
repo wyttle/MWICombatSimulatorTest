@@ -2,3 +2,4 @@
 node_modules/
 tmpclaude-*
 .claude/
+.dist/

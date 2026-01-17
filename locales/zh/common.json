@@ -73,7 +73,8 @@
         "averageTime": "平均完成时间",
         "minimumTime": "最短完成时间",
         "maxEnrageStack": "最大狂暴层数",
-        "debuffOnLevelGap": "等级差距惩罚"
+        "debuffOnLevelGap": "等级差距惩罚",
+        "teamDps": "队伍DPS (秒伤)"
     },
     "selectPlayer": "选择玩家",
     "selectAllOrNot" : "全选/取消全选",

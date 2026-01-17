@@ -391,6 +391,42 @@ class CombatSimulator extends EventTarget {
         };
     }
 
+    // 优化：预计算威胁值范围，避免重复计算
+    _selectTargetByThreat(aliveTargets) {
+        if (aliveTargets.length <= 1) {
+            return aliveTargets[0] || null;
+        }
+
+        let cumulativeThreat = 0;
+        const cumulativeRanges = new Array(aliveTargets.length);
+
+        for (let i = 0; i < aliveTargets.length; i++) {
+            const player = aliveTargets[i];
+            const playerThreat = player.combatDetails.combatStats.threat;
+            cumulativeRanges[i] = {
+                player: player,
+                rangeStart: cumulativeThreat,
+                rangeEnd: cumulativeThreat + playerThreat
+            };
+            cumulativeThreat += playerThreat;
+        }
+
+        const randomValueHit = Math.random() * cumulativeThreat;
+
+        // 二分查找优化
+        let left = 0, right = cumulativeRanges.length - 1;
+        while (left < right) {
+            const mid = (left + right) >> 1;
+            if (cumulativeRanges[mid].rangeEnd <= randomValueHit) {
+                left = mid + 1;
+            } else {
+                right = mid;
+            }
+        }
+
+        return cumulativeRanges[left].player;
+    }
+
         addToWipeLogs(logEntry) {
         const { buffer, maxSize } = this.wipeLogs;
 
@@ -594,6 +630,71 @@ class CombatSimulator extends EventTarget {
         return this.simResult;
     }
 
+    // 按次数模拟地下城（用于并行模拟）
+    async simulateDungeonByCount(targetCount, progressCallback = null) {
+        if (!this.zone.isDungeon) {
+            throw new Error("simulateDungeonByCount only works for dungeon zones");
+        }
+
+        this.reset();
+
+        let ticks = 0;
+        let lastReportedProgress = 0;
+
+        let combatStartEvent = new _events_combatStartEvent__WEBPACK_IMPORTED_MODULE_4__["default"](0);
+        this.eventQueue.addEvent(combatStartEvent);
+
+        // 模拟直到完成指定次数的地下城（成功+失败）
+        while ((this.zone.dungeonsCompleted + this.zone.dungeonsFailed) < targetCount) {
+            let nextEvent = this.eventQueue.getNextEvent();
+            await this.processEvent(nextEvent);
+
+            ticks++;
+            if (ticks == 1000) {
+                ticks = 0;
+
+                // 报告进度
+                if (progressCallback) {
+                    const currentTotal = this.zone.dungeonsCompleted + this.zone.dungeonsFailed;
+                    const progress = currentTotal / targetCount;
+                    if (progress > lastReportedProgress + 0.01) { // 每1%报告一次
+                        lastReportedProgress = progress;
+                        progressCallback({
+                            zone: this.zone.hrid,
+                            difficultyTier: this.zone.difficultyTier,
+                            progress: progress,
+                            completed: this.zone.dungeonsCompleted,
+                            failed: this.zone.dungeonsFailed
+                        });
+                    }
+                }
+            }
+        }
+
+        // 设置结果
+        this.simResult.isDungeon = true;
+        this.simResult.dungeonsCompleted = this.zone.dungeonsCompleted;
+        this.simResult.dungeonsFailed = this.zone.dungeonsFailed;
+        this.simResult.maxWaveReached = this.zone.dungeonSpawnInfo.maxWaves;
+        this.simResult.simulatedTime = this.simulationTime;
+
+        for (let i = 0; i < this.players.length; i++) {
+            this.simResult.setDropRateMultipliers(this.players[i]);
+            this.simResult.setManaUsed(this.players[i]);
+        }
+
+        // 设置 boss 信息
+        Object.entries(this.zone.dungeonSpawnInfo.fixedSpawnsMap).forEach(([wave, monsters]) => {
+            let waveName = "#" + wave.toString();
+            monsters.forEach(monster => {
+                waveName += ',' + monster.combatMonsterHrid;
+            });
+            this.simResult.bossSpawns.push(waveName);
+        });
+
+        return this.simResult;
+    }
+
     reset() {
         this.tempDungeonCount = 0;
         this.simulationTime = 0;
@@ -736,6 +837,9 @@ class CombatSimulator extends EventTarget {
 
         this.eventQueue.clearEventsOfType(_events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type);
 
+        // 不知道为啥会让结果正确，但是确实会让结果正确
+        this.checkTriggers();
+
         this.startAttacks();
     }
 
@@ -784,19 +888,7 @@ class CombatSimulator extends EventTarget {
         for (let i = 0; i < aliveTargets.length; i++) {
             let target = aliveTargets[i];
             if (!event.source.isPlayer && aliveTargets.length > 1) {
-                let cumulativeThreat = 0;
-                let cumulativeRanges = [];
-                aliveTargets.forEach(player => {
-                    let playerThreat = player.combatDetails.combatStats.threat;
-                    cumulativeThreat += playerThreat;
-                    cumulativeRanges.push({
-                        player: player,
-                        rangeStart: cumulativeThreat - playerThreat,
-                        rangeEnd: cumulativeThreat
-                    });
-                });
-                let randomValueHit = Math.random() * cumulativeThreat;
-                target = cumulativeRanges.find(range => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd).player;
+                target = this._selectTargetByThreat(aliveTargets);
             }
             let source = event.source;
 
@@ -814,12 +906,12 @@ class CombatSimulator extends EventTarget {
 
             let mayhem = source.combatDetails.combatStats.mayhem > Math.random();
 
-            if (attackResult.didHit && source.combatDetails.combatStats.curse > 0) {
+            if (attackResult.didHit && source.combatDetails.combatStats.curse > 0 && Math.random() < (100 / (100 + target.combatDetails.combatStats.tenacity))) {
                 const curseExpireTime = 15000000000;
-                let currentCurseEvent = this.eventQueue.getMatching((event) => event.type == _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type && event.source == target);
+                let currentCurseEvent = this.eventQueue.getByTypeAndSource(_events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type, target);
                 let currentCurseAmount = 0;
                 if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;
-                this.eventQueue.clearMatching((event) => event.type == _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type && event.source == target);
+                this.eventQueue.clearByTypeAndSource(_events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type, target);
 
                 let curseExpirationEvent = new _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"](this.simulationTime + curseExpireTime, currentCurseAmount, target);
                 const curseBuff = {
@@ -837,8 +929,8 @@ class CombatSimulator extends EventTarget {
             }
 
             if (source.combatDetails.combatStats.fury > 0) {
-                let currentFuryEvent = this.eventQueue.getMatching((event) => event.type == _events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type && event.source == source);
-                this.eventQueue.clearMatching((event) => event.type == _events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type && event.source == source);
+                let currentFuryEvent = this.eventQueue.getByTypeAndSource(_events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type, source);
+                this.eventQueue.clearByTypeAndSource(_events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type, source);
 
                 const furyExpireTime = 15000000000;
                 const maxFuryStack = 5;
@@ -849,7 +941,7 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit) {
                     furyAmount = Math.min(furyAmount + 1, maxFuryStack);
                 } else {
-                    furyAmount = Math.floor(furyAmount / 2);
+                    furyAmount = furyAmount / 2;
                 }
 
                 const furyAccuracyBuf = {
@@ -888,11 +980,11 @@ class CombatSimulator extends EventTarget {
 
             if (target.combatDetails.combatStats.weaken > 0) {
                 const weakenExpireTime = 15000000000;
-                let currentWeakenEvent = this.eventQueue.getMatching((event) => event.type == _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type && event.source == source);
+                let currentWeakenEvent = this.eventQueue.getByTypeAndSource(_events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type, source);
                 let weakenAmount = 0;
                 if (currentWeakenEvent)
                     weakenAmount = currentWeakenEvent.weakenAmount;
-                this.eventQueue.clearMatching((event) => event.type == _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type && event.source == source);
+                this.eventQueue.clearByTypeAndSource(_events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type, source);
                 let weakenExpirationEvent = new _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"](this.simulationTime + 15000000000, weakenAmount, source);
                 const weakenBuff = {
                     "uniqueHrid": "/buff_uniques/weaken",
@@ -1067,7 +1159,8 @@ class CombatSimulator extends EventTarget {
     }
 
     addNextAttackEvent(source) {
-        if (this.eventQueue.getMatching((event) => (event.type == _events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type || event.type == _events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type)&& event.source == source)) {
+        if (this.eventQueue.hasEventOfTypeAndSource(_events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type, source) ||
+            this.eventQueue.hasEventOfTypeAndSource(_events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type, source)) {
             return;
         }
 
@@ -1288,11 +1381,15 @@ class CombatSimulator extends EventTarget {
     processEnrageTickEvent(event) {
         if (!this.enemies) return;
         const maxEnrageStack = 10;
-        this.enemies.filter((enemy) => enemy.combatDetails.currentHitpoints > 0).forEach((enemy) => {
+        // 优化：使用 for 循环替代 filter().forEach()
+        for (let i = 0; i < this.enemies.length; i++) {
+            const enemy = this.enemies[i];
+            if (enemy.combatDetails.currentHitpoints <= 0) continue;
+
             let nowStack = Math.min(maxEnrageStack, Math.floor(event.encounterTime / enemy.enrageTime));
 
             if (nowStack <= 0) {
-                return;
+                continue;
             }
 
             console.log(enemy.hrid, nowStack, " stack Enrage at ", (event.encounterTime / ONE_SECOND));
@@ -1319,9 +1416,9 @@ class CombatSimulator extends EventTarget {
             };
             enemy.addBuff(enrageDamageBuff);
             enemy.addBuff(enrageAccuracyBuff);
-            
+
             this.simResult.maxEnrageStack = Math.max(this.simResult.maxEnrageStack, nowStack);
-        });
+        }
 
         let enrageTickEvent = new _events_enrageTickEvent__WEBPACK_IMPORTED_MODULE_17__["default"](this.simulationTime + ENRAGE_TICK_INTERVAL, event.encounterTime + ENRAGE_TICK_INTERVAL);
         this.eventQueue.addEvent(enrageTickEvent);
@@ -1333,22 +1430,25 @@ class CombatSimulator extends EventTarget {
         do {
             triggeredSomething = false;
 
-            this.players
-                .filter((player) => player.combatDetails.currentHitpoints > 0)
-                .forEach((player) => {
+            // 优化：使用 for 循环替代 filter().forEach()
+            for (let i = 0; i < this.players.length; i++) {
+                const player = this.players[i];
+                if (player.combatDetails.currentHitpoints > 0) {
                     if (this.checkTriggersForUnit(player, this.players, this.enemies)) {
                         triggeredSomething = true;
                     }
-                });
+                }
+            }
 
             if (this.enemies) {
-                this.enemies
-                    .filter((enemy) => enemy.combatDetails.currentHitpoints > 0)
-                    .forEach((enemy) => {
+                for (let i = 0; i < this.enemies.length; i++) {
+                    const enemy = this.enemies[i];
+                    if (enemy.combatDetails.currentHitpoints > 0) {
                         if (this.checkTriggersForUnit(enemy, this.enemies, this.players)) {
                             triggeredSomething = true;
                         }
-                    });
+                    }
+                }
             }
         } while (triggeredSomething);
     }
@@ -1434,7 +1534,8 @@ class CombatSimulator extends EventTarget {
         }
 
         for (const buff of consumable.buffs) {
-            let currentBuff = structuredClone(buff);
+            // 优化：使用浅拷贝替代 structuredClone，buff 对象只包含原始值
+            let currentBuff = Object.assign({}, buff);
             if (source.combatDetails.combatStats.drinkConcentration > 0 && consumable.catagoryHrid.includes("drink")) {
                 currentBuff.ratioBoost *= (1 + source.combatDetails.combatStats.drinkConcentration);
                 currentBuff.flatBoost *= (1 + source.combatDetails.combatStats.drinkConcentration);
@@ -1577,8 +1678,10 @@ class CombatSimulator extends EventTarget {
                 for (const buff of abilityEffect.buffs) {
                     if (ability.isSpecialAbility && buff.multiplierForSkillHrid && buff.multiplierPerSkillLevel > 0) {
                         let multiplier = 1.0 + source.combatDetails[buff.multiplierForSkillHrid.split('/')[2] + 'Level'] * buff.multiplierPerSkillLevel;
-                        let currentBuff = structuredClone(buff);
+                        // 优化：使用浅拷贝替代 structuredClone
+                        let currentBuff = Object.assign({}, buff);
                         currentBuff.flatBoost *= multiplier;
+                        currentBuff.ratioBoost *= multiplier;
                         target.addBuff(currentBuff, this.simulationTime);
                     } else {
                         target.addBuff(buff, this.simulationTime);
@@ -1678,19 +1781,7 @@ class CombatSimulator extends EventTarget {
             } else {
                 targets = targets.filter((unit) => unit && !avoidTarget.includes(unit.hrid) && unit.combatDetails.currentHitpoints > 0);
                 if (!source.isPlayer && targets.length > 0 && abilityEffect.targetType == "enemy") {
-                    let cumulativeThreat = 0;
-                    let cumulativeRanges = [];
-                    targets.forEach(player => {
-                        let playerThreat = player.combatDetails.combatStats.threat;
-                        cumulativeThreat += playerThreat;
-                        cumulativeRanges.push({
-                            player: player,
-                            rangeStart: cumulativeThreat - playerThreat,
-                            rangeEnd: cumulativeThreat
-                        });
-                    });
-                    let randomValueHit = Math.random() * cumulativeThreat;
-                    target = cumulativeRanges.find(range => randomValueHit >= range.rangeStart && randomValueHit < range.rangeEnd).player;
+                    target = this._selectTargetByThreat(targets);
                     avoidTarget.push(target.hrid);
                 }
                 if (targets.length <= 0) {
@@ -1734,7 +1825,9 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.stunChance > 0 && Math.random() < (abilityEffect.stunChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isStunned = true;
                     target.stunExpireTime = this.simulationTime + abilityEffect.stunDuration;
-                    this.eventQueue.clearMatching((event) => (event.type == _events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type || event.type == _events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type || event.type == _events_stunExpirationEvent__WEBPACK_IMPORTED_MODULE_11__["default"].type) && event.source == target);
+                    this.eventQueue.clearByTypeAndSource(_events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type, target);
+                    this.eventQueue.clearByTypeAndSource(_events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type, target);
+                    this.eventQueue.clearByTypeAndSource(_events_stunExpirationEvent__WEBPACK_IMPORTED_MODULE_11__["default"].type, target);
                     let stunExpirationEvent = new _events_stunExpirationEvent__WEBPACK_IMPORTED_MODULE_11__["default"](target.stunExpireTime, target);
                     this.eventQueue.addEvent(stunExpirationEvent);
                 }
@@ -1742,8 +1835,8 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.blindChance > 0 && Math.random() < (abilityEffect.blindChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isBlinded = true;
                     target.blindExpireTime = this.simulationTime + abilityEffect.blindDuration;
-                    this.eventQueue.clearMatching((event) => event.type == _events_blindExpirationEvent__WEBPACK_IMPORTED_MODULE_12__["default"].type && event.source == target)
-                    if (this.eventQueue.clearMatching((event) => event.type == _events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type && event.source == target)) {
+                    this.eventQueue.clearByTypeAndSource(_events_blindExpirationEvent__WEBPACK_IMPORTED_MODULE_12__["default"].type, target);
+                    if (this.eventQueue.clearByTypeAndSource(_events_autoAttackEvent__WEBPACK_IMPORTED_MODULE_1__["default"].type, target)) {
                         // console.log("Blind " + (this.simulationTime / 1000000000));
                         this.addNextAttackEvent(target);
                     }
@@ -1754,8 +1847,8 @@ class CombatSimulator extends EventTarget {
                 if (attackResult.didHit && abilityEffect.silenceChance > 0 && Math.random() < (abilityEffect.silenceChance * 100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     target.isSilenced = true;
                     target.silenceExpireTime = this.simulationTime + abilityEffect.silenceDuration;
-                    this.eventQueue.clearMatching((event) => event.type == _events_silenceExpirationEvent__WEBPACK_IMPORTED_MODULE_13__["default"].type && event.source == target)
-                    if (this.eventQueue.clearMatching((event) => event.type == _events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type && event.source == target)) {
+                    this.eventQueue.clearByTypeAndSource(_events_silenceExpirationEvent__WEBPACK_IMPORTED_MODULE_13__["default"].type, target);
+                    if (this.eventQueue.clearByTypeAndSource(_events_abilityCastEndEvent__WEBPACK_IMPORTED_MODULE_19__["default"].type, target)) {
                         // console.log("Silence " + (this.simulationTime / 1000000000));
                         this.addNextAttackEvent(target);
                     }
@@ -1765,10 +1858,10 @@ class CombatSimulator extends EventTarget {
 
                 if (attackResult.didHit && source.combatDetails.combatStats.curse > 0 && Math.random() < (100 / (100 + target.combatDetails.combatStats.tenacity))) {
                     const curseExpireTime = 15000000000;
-                    let currentCurseEvent = this.eventQueue.getMatching((event) => event.type == _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type && event.source == target);
+                    let currentCurseEvent = this.eventQueue.getByTypeAndSource(_events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type, target);
                     let currentCurseAmount = 0;
                     if (currentCurseEvent) currentCurseAmount = currentCurseEvent.curseAmount;
-                    this.eventQueue.clearMatching((event) => event.type == _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type && event.source == target);
+                    this.eventQueue.clearByTypeAndSource(_events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"].type, target);
 
                     let curseExpirationEvent = new _events_curseExpirationEvent__WEBPACK_IMPORTED_MODULE_14__["default"](this.simulationTime + curseExpireTime, currentCurseAmount, target);
                     const curseBuff = {
@@ -1785,14 +1878,64 @@ class CombatSimulator extends EventTarget {
                     this.eventQueue.addEvent(curseExpirationEvent);
                 }
 
+                if (source.combatDetails.combatStats.fury > 0) {
+                    let currentFuryEvent = this.eventQueue.getByTypeAndSource(_events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type, source);
+                    this.eventQueue.clearByTypeAndSource(_events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"].type, source);
+
+                    const furyExpireTime = 15000000000;
+                    const maxFuryStack = 5;
+
+                    let furyAmount = 0;
+                    if (currentFuryEvent) furyAmount = currentFuryEvent.furyAmount;
+
+                    if (attackResult.didHit) {
+                        furyAmount = Math.min(furyAmount + 1, maxFuryStack);
+                    } else {
+                        furyAmount = furyAmount / 2;
+                    }
+
+                    const furyAccuracyBuf = {
+                        "uniqueHrid": "/buff_uniques/fury_accuracy",
+                        "typeHrid": "/buff_types/fury_accuracy",
+                        "ratioBoost": furyAmount * source.combatDetails.combatStats.fury,
+                        "ratioBoostLevelBonus": 0,
+                        "flatBoost": 0,
+                        "flatBoostLevelBonus": 0,
+                        "startTime": "0001-01-01T00:00:00Z",
+                        "duration": furyExpireTime
+                    };
+                    const furyDamageBuf = {
+                        "uniqueHrid": "/buff_uniques/fury_damage",
+                        "typeHrid": "/buff_types/fury_damage",
+                        "ratioBoost": furyAmount * source.combatDetails.combatStats.fury,
+                        "ratioBoostLevelBonus": 0,
+                        "flatBoost": 0,
+                        "flatBoostLevelBonus": 0,
+                        "startTime": "0001-01-01T00:00:00Z",
+                        "duration": furyExpireTime
+                    };
+
+                    if (furyAmount > 0) {
+                        let furyExpirationEvent = new _events_furyExpirationEvent__WEBPACK_IMPORTED_MODULE_16__["default"](this.simulationTime + furyExpireTime, furyAmount, source);
+                        this.eventQueue.addEvent(furyExpirationEvent);
+
+                        source.addBuff(furyAccuracyBuf, this.simulationTime);
+                        source.addBuff(furyDamageBuf, this.simulationTime);
+                    }
+                    else {
+                        source.removeBuff(furyAccuracyBuf);
+                        source.removeBuff(furyDamageBuf);
+                    }
+                }
+
                 if (target.combatDetails.combatStats.weaken > 0) {
                     const weakenExpireTime = 15000000000;
                     source.weakenExpireTime = this.simulationTime + weakenExpireTime;
-                    let currentWeakenEvent = this.eventQueue.getMatching((event) => event.type == _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type && event.source == source);
+                    let currentWeakenEvent = this.eventQueue.getByTypeAndSource(_events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type, source);
                     let weakenAmount = 0;
                     if (currentWeakenEvent)
                         weakenAmount = currentWeakenEvent.weakenAmount;
-                    this.eventQueue.clearMatching((event) => event.type == _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type && event.source == source);
+                    this.eventQueue.clearByTypeAndSource(_events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"].type, source);
                     let weakenExpirationEvent = new _events_weakenExpirationEvent__WEBPACK_IMPORTED_MODULE_15__["default"](this.simulationTime + weakenExpireTime, weakenAmount, source);
                     const weakenBuff = {
                         "uniqueHrid": "/buff_uniques/weaken",
@@ -1911,7 +2054,7 @@ class CombatSimulator extends EventTarget {
         let reviveTarget = targets.find((unit) => unit && unit.combatDetails.currentHitpoints <= 0);
 
         if (reviveTarget) {
-            this.eventQueue.clearMatching((event) => event.type == _events_playerRespawnEvent__WEBPACK_IMPORTED_MODULE_9__["default"].type && event.hrid == reviveTarget.hrid);
+            this.eventQueue.clearByTypeAndHrid(_events_playerRespawnEvent__WEBPACK_IMPORTED_MODULE_9__["default"].type, reviveTarget.hrid);
 
             reviveTarget.removeExpiredBuffs(this.simulationTime);
 
@@ -2119,7 +2262,19 @@ class CombatUnit {
 
     constructor() { }
 
+    // Cache for buff boosts to avoid repeated calculations
+    _buffBoostCache = new Map();
+    _buffBoostsCacheValid = false;
+
+    _invalidateBuffCache() {
+        this._buffBoostsCacheValid = false;
+        this._buffBoostCache.clear();
+    }
+
     updateCombatDetails() {
+        // 一次性预计算所有 buff 聚合值，避免重复遍历
+        const buffAggregates = this._precomputeBuffAggregates();
+
         if (this.isPlayer) {
             if (this.combatDetails.combatStats.hpRegenPer10 === 0) {
                 this.combatDetails.combatStats.hpRegenPer10 = 0.01;
@@ -2133,30 +2288,32 @@ class CombatUnit {
             }
         }
 
-        ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"].forEach((stat) => {
+        // 使用预计算的 buff 聚合值
+        const statTypes = ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"];
+        for (let i = 0; i < statTypes.length; i++) {
+            const stat = statTypes[i];
             this.combatDetails[stat + "Level"] = this[stat + "Level"];
-            let boosts = this.getBuffBoosts("/buff_types/" + stat + "_level");
-            boosts.forEach((buff) => {
-                this.combatDetails[stat + "Level"] += (this[stat + "Level"] * buff.ratioBoost);
-                this.combatDetails[stat + "Level"] += buff.flatBoost;
-            });
-        });
+            const boost = buffAggregates["/buff_types/" + stat + "_level"];
+            if (boost) {
+                this.combatDetails[stat + "Level"] += (this[stat + "Level"] * boost.ratioBoost);
+                this.combatDetails[stat + "Level"] += boost.flatBoost;
+            }
+        }
 
         this.combatDetails.maxHitpoints = Math.floor
             (10 * (10 + this.combatDetails.staminaLevel) + this.combatDetails.combatStats.maxHitpoints);
         this.combatDetails.maxManapoints = Math.floor
             (10 * (10 + this.combatDetails.intelligenceLevel) + this.combatDetails.combatStats.maxManapoints);
 
-        let accuracyRatioBoostFromFury = this.getBuffBoost("/buff_types/fury_accuracy").ratioBoost;
-        let damageRatioBoostFromFury = this.getBuffBoost("/buff_types/fury_damage").ratioBoost;
-        // if (accuracyRatioBoostFromFury > 0) {
-        //     console.log("Fury Boost: " + accuracyRatioBoostFromFury);
-        // }
+        const accuracyRatioBoostFromFury = buffAggregates["/buff_types/fury_accuracy"]?.ratioBoost || 0;
+        const damageRatioBoostFromFury = buffAggregates["/buff_types/fury_damage"]?.ratioBoost || 0;
+        const accuracyRatioBoost = buffAggregates["/buff_types/accuracy"]?.ratioBoost || 0;
+        const damageRatioBoost = buffAggregates["/buff_types/damage"]?.ratioBoost || 0;
+        const evasionBoost = buffAggregates["/buff_types/evasion"] || { flatBoost: 0, ratioBoost: 0 };
 
-        let accuracyRatioBoost = this.getBuffBoost("/buff_types/accuracy").ratioBoost;
-        let damageRatioBoost = this.getBuffBoost("/buff_types/damage").ratioBoost;
-
-        ["stab", "slash", "smash"].forEach((style) => {
+        const meleeStyles = ["stab", "slash", "smash"];
+        for (let i = 0; i < meleeStyles.length; i++) {
+            const style = meleeStyles[i];
             this.combatDetails[style + "AccuracyRating"] =
                 (10 + this.combatDetails.attackLevel) *
                 (1 + this.combatDetails.combatStats[style + "Accuracy"]) *
@@ -2167,17 +2324,12 @@ class CombatUnit {
                 (1 + this.combatDetails.combatStats[style + "Damage"]) *
                 (1 + damageRatioBoost) *
                 (1 + damageRatioBoostFromFury);
-            let baseEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats[style + "Evasion"]);
-            this.combatDetails[style + "EvasionRating"] = baseEvasion;
-            let evasionBoosts = this.getBuffBoosts("/buff_types/evasion");
-            for (const boost of evasionBoosts) {
-                this.combatDetails[style + "EvasionRating"] += boost.flatBoost;
-                this.combatDetails[style + "EvasionRating"] += baseEvasion * boost.ratioBoost;
-            }
-        });
+            const baseEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats[style + "Evasion"]);
+            this.combatDetails[style + "EvasionRating"] = baseEvasion + evasionBoost.flatBoost + baseEvasion * evasionBoost.ratioBoost;
+        }
 
-        this.combatDetails.defensiveMaxDamage = 
-            (10 + this.combatDetails.defenseLevel) * 
+        this.combatDetails.defensiveMaxDamage =
+            (10 + this.combatDetails.defenseLevel) *
             (1 + this.combatDetails.combatStats.defensiveDamage) *
             (1 + damageRatioBoost) *
             (1 + damageRatioBoostFromFury);
@@ -2198,18 +2350,10 @@ class CombatUnit {
             (1 + damageRatioBoost) *
             (1 + damageRatioBoostFromFury);
 
-        let baseRangedEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.rangedEvasion);
-        this.combatDetails.rangedEvasionRating = baseRangedEvasion;
-        let evasionBoosts = this.getBuffBoosts("/buff_types/evasion");
-        for (const boost of evasionBoosts) {
-            this.combatDetails.rangedEvasionRating += boost.flatBoost;
-            this.combatDetails.rangedEvasionRating += baseRangedEvasion * boost.ratioBoost;
-        }
+        const baseRangedEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.rangedEvasion);
+        this.combatDetails.rangedEvasionRating = baseRangedEvasion + evasionBoost.flatBoost + baseRangedEvasion * evasionBoost.ratioBoost;
 
-        this.combatDetails.combatStats.damageTaken = this.getBuffBoost("/buff_types/damage_taken").flatBoost;
-        // if (this.combatDetails.combatStats.damageTaken > 0) {
-        //     console.log("Damage taken: " + this.combatDetails.combatStats.damageTaken);
-        // }
+        this.combatDetails.combatStats.damageTaken = buffAggregates["/buff_types/damage_taken"]?.flatBoost || 0;
 
         this.combatDetails.magicAccuracyRating =
             (10 + this.combatDetails.attackLevel) *
@@ -2222,110 +2366,98 @@ class CombatUnit {
             (1 + damageRatioBoost) *
             (1 + damageRatioBoostFromFury);
 
-        let baseMagicEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.magicEvasion);
-        this.combatDetails.magicEvasionRating = baseMagicEvasion;
-        for (const boost of evasionBoosts) {
-            this.combatDetails.magicEvasionRating += boost.flatBoost;
-            this.combatDetails.magicEvasionRating += baseMagicEvasion * boost.ratioBoost;
-        }
+        const baseMagicEvasion = (10 + this.combatDetails.defenseLevel) * (1 + this.combatDetails.combatStats.magicEvasion);
+        this.combatDetails.magicEvasionRating = baseMagicEvasion + evasionBoost.flatBoost + baseMagicEvasion * evasionBoost.ratioBoost;
 
-        this.combatDetails.combatStats.physicalAmplify += this.getBuffBoost("/buff_types/physical_amplify").flatBoost;
-        this.combatDetails.combatStats.waterAmplify += this.getBuffBoost("/buff_types/water_amplify").flatBoost;
-        this.combatDetails.combatStats.natureAmplify += this.getBuffBoost("/buff_types/nature_amplify").flatBoost;
-        this.combatDetails.combatStats.fireAmplify += this.getBuffBoost("/buff_types/fire_amplify").flatBoost;
-        this.combatDetails.combatStats.healingAmplify += this.getBuffBoost("/buff_types/healing_amplify").flatBoost;
+        this.combatDetails.combatStats.physicalAmplify += buffAggregates["/buff_types/physical_amplify"]?.flatBoost || 0;
+        this.combatDetails.combatStats.waterAmplify += buffAggregates["/buff_types/water_amplify"]?.flatBoost || 0;
+        this.combatDetails.combatStats.natureAmplify += buffAggregates["/buff_types/nature_amplify"]?.flatBoost || 0;
+        this.combatDetails.combatStats.fireAmplify += buffAggregates["/buff_types/fire_amplify"]?.flatBoost || 0;
+        this.combatDetails.combatStats.healingAmplify += buffAggregates["/buff_types/healing_amplify"]?.flatBoost || 0;
 
         this.combatDetails.combatStats.attackInterval /= (1 + (this.combatDetails.attackLevel / 2000));
 
-        let baseAttackSpeed = this.combatDetails.combatStats.attackSpeed;
+        const baseAttackSpeed = this.combatDetails.combatStats.attackSpeed;
         this.combatDetails.combatStats.attackInterval /= (1 + baseAttackSpeed);
-        let attackIntervalBoosts = this.getBuffBoosts("/buff_types/attack_speed");
-        let attackIntervalRatioBoost = attackIntervalBoosts
-            .map((boost) => boost.ratioBoost)
-            .reduce((prev, cur) => prev + cur, 0);
-        this.combatDetails.combatStats.attackInterval /= (1 + attackIntervalRatioBoost);
+        const attackSpeedBoost = buffAggregates["/buff_types/attack_speed"] || { ratioBoost: 0 };
+        this.combatDetails.combatStats.attackInterval /= (1 + attackSpeedBoost.ratioBoost);
 
-        let baseArmor = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.armor;
-        this.combatDetails.totalArmor = baseArmor;
-        let armorBoosts = this.getBuffBoosts("/buff_types/armor");
-        for (const boost of armorBoosts) {
-            this.combatDetails.totalArmor += boost.flatBoost;
-            this.combatDetails.totalArmor += baseArmor * boost.ratioBoost;
-        }
+        const baseArmor = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.armor;
+        const armorBoost = buffAggregates["/buff_types/armor"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.totalArmor = baseArmor + armorBoost.flatBoost + baseArmor * armorBoost.ratioBoost;
 
-        let baseWaterResistance =
-            0.2 * this.combatDetails.defenseLevel +
-            this.combatDetails.combatStats.waterResistance;
-        this.combatDetails.totalWaterResistance = baseWaterResistance;
-        let waterResistanceBoosts = this.getBuffBoosts("/buff_types/water_resistance");
-        for (const boost of waterResistanceBoosts) {
-            this.combatDetails.totalWaterResistance += boost.flatBoost;
-            this.combatDetails.totalWaterResistance += baseWaterResistance * boost.ratioBoost;
-        }
+        const baseWaterResistance = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.waterResistance;
+        const waterResistanceBoost = buffAggregates["/buff_types/water_resistance"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.totalWaterResistance = baseWaterResistance + waterResistanceBoost.flatBoost + baseWaterResistance * waterResistanceBoost.ratioBoost;
 
-        let baseNatureResistance =
-            0.2 * this.combatDetails.defenseLevel +
-            this.combatDetails.combatStats.natureResistance;
-        this.combatDetails.totalNatureResistance = baseNatureResistance;
-        let natureResistanceBoosts = this.getBuffBoosts("/buff_types/nature_resistance");
-        for (const boost of natureResistanceBoosts) {
-            this.combatDetails.totalNatureResistance += boost.flatBoost;
-            this.combatDetails.totalNatureResistance += baseNatureResistance * boost.ratioBoost;
-        }
+        const baseNatureResistance = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.natureResistance;
+        const natureResistanceBoost = buffAggregates["/buff_types/nature_resistance"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.totalNatureResistance = baseNatureResistance + natureResistanceBoost.flatBoost + baseNatureResistance * natureResistanceBoost.ratioBoost;
 
-        let baseFireResistance =
-            0.2 * this.combatDetails.defenseLevel +
-            this.combatDetails.combatStats.fireResistance;
-        this.combatDetails.totalFireResistance = baseFireResistance;
-        let fireResistanceBoosts = this.getBuffBoosts("/buff_types/fire_resistance");
-        for (const boost of fireResistanceBoosts) {
-            this.combatDetails.totalFireResistance += boost.flatBoost;
-            this.combatDetails.totalFireResistance += baseFireResistance * boost.ratioBoost;
-        }
+        const baseFireResistance = 0.2 * this.combatDetails.defenseLevel + this.combatDetails.combatStats.fireResistance;
+        const fireResistanceBoost = buffAggregates["/buff_types/fire_resistance"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.totalFireResistance = baseFireResistance + fireResistanceBoost.flatBoost + baseFireResistance * fireResistanceBoost.ratioBoost;
 
-        let hpRegenBoosts = this.getBuffBoost("/buff_types/hp_regen");
-        this.combatDetails.combatStats.hpRegenPer10 += this.combatDetails.combatStats.hpRegenPer10 * hpRegenBoosts.ratioBoost;
-        this.combatDetails.combatStats.hpRegenPer10 += hpRegenBoosts.flatBoost;
+        const hpRegenBoost = buffAggregates["/buff_types/hp_regen"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.combatStats.hpRegenPer10 += this.combatDetails.combatStats.hpRegenPer10 * hpRegenBoost.ratioBoost;
+        this.combatDetails.combatStats.hpRegenPer10 += hpRegenBoost.flatBoost;
 
-        let mpRegenBoosts = this.getBuffBoost("/buff_types/mp_regen");
-        this.combatDetails.combatStats.mpRegenPer10 += this.combatDetails.combatStats.mpRegenPer10 * mpRegenBoosts.ratioBoost;
-        this.combatDetails.combatStats.mpRegenPer10 += mpRegenBoosts.flatBoost;
+        const mpRegenBoost = buffAggregates["/buff_types/mp_regen"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.combatStats.mpRegenPer10 += this.combatDetails.combatStats.mpRegenPer10 * mpRegenBoost.ratioBoost;
+        this.combatDetails.combatStats.mpRegenPer10 += mpRegenBoost.flatBoost;
 
-        this.combatDetails.combatStats.lifeSteal += this.getBuffBoost("/buff_types/life_steal").flatBoost;
-        this.combatDetails.combatStats.physicalThorns += this.getBuffBoost(
-            "/buff_types/physical_thorns"
-        ).flatBoost;
-        this.combatDetails.combatStats.elementalThorns += this.getBuffBoost(
-            "/buff_types/elemental_thorns"
-        ).flatBoost;
-        this.combatDetails.combatStats.combatExperience += this.getBuffBoost("/buff_types/wisdom").flatBoost;
-        this.combatDetails.combatStats.criticalRate += this.getBuffBoost("/buff_types/critical_rate").flatBoost;
-        this.combatDetails.combatStats.criticalDamage += this.getBuffBoost("/buff_types/critical_damage").flatBoost;
+        this.combatDetails.combatStats.lifeSteal += buffAggregates["/buff_types/life_steal"]?.flatBoost || 0;
+        this.combatDetails.combatStats.physicalThorns += buffAggregates["/buff_types/physical_thorns"]?.flatBoost || 0;
+        this.combatDetails.combatStats.elementalThorns += buffAggregates["/buff_types/elemental_thorns"]?.flatBoost || 0;
+        this.combatDetails.combatStats.combatExperience += buffAggregates["/buff_types/wisdom"]?.flatBoost || 0;
+        this.combatDetails.combatStats.criticalRate += buffAggregates["/buff_types/critical_rate"]?.flatBoost || 0;
+        this.combatDetails.combatStats.criticalDamage += buffAggregates["/buff_types/critical_damage"]?.flatBoost || 0;
 
-        this.combatDetails.combatStats.castSpeed += this.getBuffBoost("/buff_types/cast_speed").flatBoost;
+        this.combatDetails.combatStats.castSpeed += buffAggregates["/buff_types/cast_speed"]?.flatBoost || 0;
         this.combatDetails.combatStats.castSpeed += this.combatDetails["attackLevel"] / 2000;
 
-        let combatDropRateBoosts = this.getBuffBoost("/buff_types/combat_drop_rate");
-        this.combatDetails.combatStats.combatDropRate += (1 + this.combatDetails.combatStats.combatDropRate) * combatDropRateBoosts.ratioBoost;
-        this.combatDetails.combatStats.combatDropRate += combatDropRateBoosts.flatBoost;
-        let combatRareFindBoosts = this.getBuffBoost("/buff_types/rare_find");
-        this.combatDetails.combatStats.combatRareFind += (1 + this.combatDetails.combatStats.combatRareFind) * combatRareFindBoosts.ratioBoost;
-        this.combatDetails.combatStats.combatRareFind += combatRareFindBoosts.flatBoost;
-        let combatDropQuantityBoosts = this.getBuffBoost("/buff_types/combat_drop_quantity");
-        this.combatDetails.combatStats.combatDropQuantity += (1 + this.combatDetails.combatStats.combatDropQuantity) * combatDropQuantityBoosts.ratioBoost;
-        this.combatDetails.combatStats.combatDropQuantity += combatDropQuantityBoosts.flatBoost;
+        const combatDropRateBoost = buffAggregates["/buff_types/combat_drop_rate"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.combatStats.combatDropRate += (1 + this.combatDetails.combatStats.combatDropRate) * combatDropRateBoost.ratioBoost;
+        this.combatDetails.combatStats.combatDropRate += combatDropRateBoost.flatBoost;
 
-        let baseThreat = 100 + this.combatDetails.combatStats.threat;
+        const rareFindBoost = buffAggregates["/buff_types/rare_find"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.combatStats.combatRareFind += (1 + this.combatDetails.combatStats.combatRareFind) * rareFindBoost.ratioBoost;
+        this.combatDetails.combatStats.combatRareFind += rareFindBoost.flatBoost;
+
+        const combatDropQuantityBoost = buffAggregates["/buff_types/combat_drop_quantity"] || { flatBoost: 0, ratioBoost: 0 };
+        this.combatDetails.combatStats.combatDropQuantity += (1 + this.combatDetails.combatStats.combatDropQuantity) * combatDropQuantityBoost.ratioBoost;
+        this.combatDetails.combatStats.combatDropQuantity += combatDropQuantityBoost.flatBoost;
+
+        const baseThreat = 100 + this.combatDetails.combatStats.threat;
         this.combatDetails.totalThreat = baseThreat;
-        let threatBoosts = this.getBuffBoost("/buff_types/threat");
-        if (threatBoosts.ratioBoost !== 0) {
-            this.combatDetails.combatStats.threat += baseThreat * threatBoosts.ratioBoost;
+        const threatBoost = buffAggregates["/buff_types/threat"] || { flatBoost: 0, ratioBoost: 0 };
+        if (threatBoost.ratioBoost !== 0) {
+            this.combatDetails.combatStats.threat += baseThreat * threatBoost.ratioBoost;
         } else {
             this.combatDetails.combatStats.threat = baseThreat;
         }
-        this.combatDetails.combatStats.threat += threatBoosts.flatBoost;
+        this.combatDetails.combatStats.threat += threatBoost.flatBoost;
 
-        this.combatDetails.combatStats.retaliation += this.getBuffBoost("/buff_types/retaliation").flatBoost;
+        this.combatDetails.combatStats.retaliation += buffAggregates["/buff_types/retaliation"]?.flatBoost || 0;
+    }
+
+    // 一次性遍历所有 buffs，预计算所有类型的聚合值
+    _precomputeBuffAggregates() {
+        const aggregates = {};
+        const buffs = this.combatBuffs;
+
+        for (const key in buffs) {
+            const buff = buffs[key];
+            const typeHrid = buff.typeHrid;
+
+            if (!aggregates[typeHrid]) {
+                aggregates[typeHrid] = { ratioBoost: 0, flatBoost: 0 };
+            }
+            aggregates[typeHrid].ratioBoost += buff.ratioBoost || 0;
+            aggregates[typeHrid].flatBoost += buff.flatBoost || 0;
+        }
+
+        return aggregates;
     }
 
     addBuff(buff, currentTime) {
@@ -2390,7 +2522,8 @@ class CombatUnit {
     }
 
     clearBuffs() {
-        this.combatBuffs = structuredClone(this.permanentBuffs);
+        // Shallow copy is sufficient since buff objects are not mutated after creation
+        this.combatBuffs = Object.assign({}, this.permanentBuffs);
         this.updateCombatDetails();
     }
 
@@ -2405,30 +2538,39 @@ class CombatUnit {
     }
 
     getBuffBoosts(type) {
-        let boosts = [];
-        Object.values(this.combatBuffs)
-            .filter((buff) => buff.typeHrid == type)
-            .forEach((buff) => {
+        const boosts = [];
+        const buffs = this.combatBuffs;
+        for (const key in buffs) {
+            const buff = buffs[key];
+            if (buff.typeHrid === type) {
                 boosts.push({ ratioBoost: buff.ratioBoost, flatBoost: buff.flatBoost });
-            });
-
+            }
+        }
         return boosts;
     }
 
     getBuffBoost(type) {
-        let boosts = this.getBuffBoosts(type);
-
-        let boost = {
-            ratioBoost: 0,
-            flatBoost: 0,
-        };
-
-        for (let i = 0; i < boosts.length; i++) {
-            boost.ratioBoost += boosts[i]?.ratioBoost ?? 0;
-            boost.flatBoost += boosts[i]?.flatBoost ?? 0;
+        // Check cache first
+        const cached = this._buffBoostCache.get(type);
+        if (cached !== undefined) {
+            return cached;
         }
 
-        return boost;
+        let ratioBoost = 0;
+        let flatBoost = 0;
+        const buffs = this.combatBuffs;
+
+        for (const key in buffs) {
+            const buff = buffs[key];
+            if (buff.typeHrid === type) {
+                ratioBoost += buff.ratioBoost || 0;
+                flatBoost += buff.flatBoost || 0;
+            }
+        }
+
+        const result = { ratioBoost, flatBoost };
+        this._buffBoostCache.set(type, result);
+        return result;
     }
 
     reset(currentTime = 0) {
@@ -2510,6 +2652,47 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony export */   "default": () => (__WEBPACK_DEFAULT_EXPORT__)
 /* harmony export */ });
 class CombatUtilities {
+    // Pre-computed combat style lookup table for faster access
+    static _combatStyleMap = {
+        "/combat_styles/stab": "stab",
+        "/combat_styles/slash": "slash",
+        "/combat_styles/smash": "smash",
+        "/combat_styles/ranged": "ranged",
+        "/combat_styles/magic": "magic"
+    };
+
+    // Pre-computed damage type lookup table
+    static _damageTypeMap = {
+        "/damage_types/physical": {
+            amplify: "physicalAmplify",
+            resistance: "totalArmor",
+            penetration: "armorPenetration",
+            thornPower: "physicalThorns",
+            thornType: "physicalThorns"
+        },
+        "/damage_types/water": {
+            amplify: "waterAmplify",
+            resistance: "totalWaterResistance",
+            penetration: "waterPenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        },
+        "/damage_types/nature": {
+            amplify: "natureAmplify",
+            resistance: "totalNatureResistance",
+            penetration: "naturePenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        },
+        "/damage_types/fire": {
+            amplify: "fireAmplify",
+            resistance: "totalFireResistance",
+            penetration: "firePenetration",
+            thornPower: "elementalThorns",
+            thornType: "elementalThorns"
+        }
+    };
+
     static getTarget(enemies) {
         if (!enemies) {
             return null;
@@ -2558,93 +2741,41 @@ class CombatUtilities {
     }
 
     static processAttack(source, target, abilityEffect = null) {
-        let combatStyle = abilityEffect
+        const combatStyle = abilityEffect
             ? abilityEffect.combatStyleHrid
             : source.combatDetails.combatStats.combatStyleHrid;
-        let damageType = abilityEffect ? abilityEffect.damageType : source.combatDetails.combatStats.damageType;
+        const damageType = abilityEffect ? abilityEffect.damageType : source.combatDetails.combatStats.damageType;
 
-        let sourceAccuracyRating = 1;
-        let sourceAutoAttackMaxDamage = 1;
-        let targetEvasionRating = 1;
-
-        switch (combatStyle) {
-            case "/combat_styles/stab":
-                sourceAccuracyRating = source.combatDetails.stabAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.stabMaxDamage;
-                targetEvasionRating = target.combatDetails.stabEvasionRating;
-                break;
-            case "/combat_styles/slash":
-                sourceAccuracyRating = source.combatDetails.slashAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.slashMaxDamage;
-                targetEvasionRating = target.combatDetails.slashEvasionRating;
-                break;
-            case "/combat_styles/smash":
-                sourceAccuracyRating = source.combatDetails.smashAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.smashMaxDamage;
-                targetEvasionRating = target.combatDetails.smashEvasionRating;
-                break;
-            case "/combat_styles/ranged":
-                sourceAccuracyRating = source.combatDetails.rangedAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.rangedMaxDamage;
-                targetEvasionRating = target.combatDetails.rangedEvasionRating;
-                break;
-            case "/combat_styles/magic":
-                sourceAccuracyRating = source.combatDetails.magicAccuracyRating;
-                sourceAutoAttackMaxDamage = source.combatDetails.magicMaxDamage;
-                targetEvasionRating = target.combatDetails.magicEvasionRating;
-                break;
-            default:
-                throw new Error("Unknown combat style: " + combatStyle);
+        // Use lookup table for combat style
+        const styleKey = this._combatStyleMap[combatStyle];
+        if (!styleKey) {
+            throw new Error("Unknown combat style: " + combatStyle);
         }
 
-        let sourceDamageMultiplier = 1;
-        let sourceResistance = 0;
-        let sourcePenetration = 0;
-        let targetResistance = 0;
-        let targetThornPower = 0;
-        let targetPenetration = 0;
-        let thornType;
+        const sourceDetails = source.combatDetails;
+        const targetDetails = target.combatDetails;
 
-        switch (damageType) {
-            case "/damage_types/physical":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.physicalAmplify;
-                sourceResistance = source.combatDetails.totalArmor;
-                sourcePenetration = source.combatDetails.combatStats.armorPenetration;
-                targetResistance = target.combatDetails.totalArmor;
-                targetThornPower = target.combatDetails.combatStats.physicalThorns;
-                targetPenetration = target.combatDetails.combatStats.armorPenetration;
-                thornType = "physicalThorns";
-                break;
-            case "/damage_types/water":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.waterAmplify;
-                sourceResistance = source.combatDetails.totalWaterResistance;
-                sourcePenetration = source.combatDetails.combatStats.waterPenetration;
-                targetResistance = target.combatDetails.totalWaterResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.waterPenetration;
-                thornType = "elementalThorns";
-                break;
-            case "/damage_types/nature":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.natureAmplify;
-                sourceResistance = source.combatDetails.totalNatureResistance;
-                sourcePenetration = source.combatDetails.combatStats.naturePenetration;
-                targetResistance = target.combatDetails.totalNatureResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.naturePenetration;
-                thornType = "elementalThorns";
-                break;
-            case "/damage_types/fire":
-                sourceDamageMultiplier = 1 + source.combatDetails.combatStats.fireAmplify;
-                sourceResistance = source.combatDetails.totalFireResistance;
-                sourcePenetration = source.combatDetails.combatStats.firePenetration;
-                targetResistance = target.combatDetails.totalFireResistance;
-                targetThornPower = target.combatDetails.combatStats.elementalThorns;
-                targetPenetration = target.combatDetails.combatStats.firePenetration;
-                thornType = "elementalThorns";
-                break;
-            default:
-                throw new Error("Unknown damage type: " + damageType);
+        const sourceAccuracyKey = styleKey + "AccuracyRating";
+        const sourceMaxDamageKey = styleKey + "MaxDamage";
+        const targetEvasionKey = styleKey + "EvasionRating";
+
+        let sourceAccuracyRating = sourceDetails[sourceAccuracyKey];
+        const sourceAutoAttackMaxDamage = sourceDetails[sourceMaxDamageKey];
+        const targetEvasionRating = targetDetails[targetEvasionKey];
+
+        // Use lookup table for damage type
+        const damageInfo = this._damageTypeMap[damageType];
+        if (!damageInfo) {
+            throw new Error("Unknown damage type: " + damageType);
         }
+
+        const sourceDamageMultiplier = 1 + sourceDetails.combatStats[damageInfo.amplify];
+        const sourceResistance = sourceDetails[damageInfo.resistance];
+        const sourcePenetration = sourceDetails.combatStats[damageInfo.penetration];
+        const targetResistance = targetDetails[damageInfo.resistance];
+        const targetThornPower = targetDetails.combatStats[damageInfo.thornPower];
+        const targetPenetration = targetDetails.combatStats[damageInfo.penetration];
+        const thornType = damageInfo.thornType;
 
         let hitChance = 1;
         let critChance = 0;
@@ -3433,65 +3564,264 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var heap_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(/*! heap-js */ "./node_modules/heap-js/dist/heap-js.es5.js");
 
 
+/**
+ * Optimized EventQueue with O(1) lookups by type and source
+ * Uses auxiliary indexes to avoid O(n) scans on clearMatching/getMatching
+ */
 class EventQueue {
     constructor() {
         this.minHeap = new heap_js__WEBPACK_IMPORTED_MODULE_0__["default"]((a, b) => a.time - b.time);
+        // Index: type -> Set of events
+        this.byType = new Map();
+        // Index: source -> Set of events
+        this.bySource = new Map();
+        // Index: target -> Set of events
+        this.byTarget = new Map();
+        // Track deleted events (lazy deletion)
+        this.deleted = new WeakSet();
     }
 
     addEvent(event) {
         this.minHeap.push(event);
+
+        // Index by type
+        if (event.type !== undefined) {
+            if (!this.byType.has(event.type)) {
+                this.byType.set(event.type, new Set());
+            }
+            this.byType.get(event.type).add(event);
+        }
+
+        // Index by source
+        if (event.source !== undefined) {
+            if (!this.bySource.has(event.source)) {
+                this.bySource.set(event.source, new Set());
+            }
+            this.bySource.get(event.source).add(event);
+        }
+
+        // Index by target
+        if (event.target !== undefined) {
+            if (!this.byTarget.has(event.target)) {
+                this.byTarget.set(event.target, new Set());
+            }
+            this.byTarget.get(event.target).add(event);
+        }
     }
 
     getNextEvent() {
-        return this.minHeap.pop();
+        // Skip deleted events (lazy deletion)
+        while (this.minHeap.length > 0) {
+            const event = this.minHeap.pop();
+            if (!this.deleted.has(event)) {
+                this._removeFromIndexes(event);
+                return event;
+            }
+        }
+        return undefined;
+    }
+
+    _removeFromIndexes(event) {
+        if (event.type !== undefined) {
+            const typeSet = this.byType.get(event.type);
+            if (typeSet) {
+                typeSet.delete(event);
+            }
+        }
+        if (event.source !== undefined) {
+            const sourceSet = this.bySource.get(event.source);
+            if (sourceSet) {
+                sourceSet.delete(event);
+            }
+        }
+        if (event.target !== undefined) {
+            const targetSet = this.byTarget.get(event.target);
+            if (targetSet) {
+                targetSet.delete(event);
+            }
+        }
+    }
+
+    _markDeleted(event) {
+        this.deleted.add(event);
+        this._removeFromIndexes(event);
     }
 
     containsEventOfType(type) {
-        let heapEvents = this.minHeap.toArray();
-
-        return heapEvents.some((event) => event.type == type);
+        const typeSet = this.byType.get(type);
+        return typeSet && typeSet.size > 0;
     }
 
     containsEventOfTypeAndHrid(type, hrid) {
-        let heapEvents = this.minHeap.toArray();
-        return heapEvents.some((event) => event.type == type && event.hrid == hrid);
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return false;
+
+        for (const event of typeSet) {
+            if (event.hrid === hrid) {
+                return true;
+            }
+        }
+        return false;
     }
 
     clear() {
         this.minHeap = new heap_js__WEBPACK_IMPORTED_MODULE_0__["default"]((a, b) => a.time - b.time);
+        this.byType.clear();
+        this.bySource.clear();
+        this.byTarget.clear();
+        this.deleted = new WeakSet();
     }
 
     clearEventsForUnit(unit) {
-        this.clearMatching((event) => event.source == unit || event.target == unit);
+        // Get events where unit is source or target
+        // Copy to array first to avoid modifying Set during iteration
+        const sourceEvents = this.bySource.get(unit);
+        const targetEvents = this.byTarget.get(unit);
+
+        if (sourceEvents) {
+            const eventsToDelete = [...sourceEvents];
+            for (const event of eventsToDelete) {
+                this._markDeleted(event);
+            }
+        }
+        if (targetEvents) {
+            const eventsToDelete = [...targetEvents];
+            for (const event of eventsToDelete) {
+                this._markDeleted(event);
+            }
+        }
     }
 
     clearEventsOfType(type) {
-        this.clearMatching((event) => event.type == type);
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return;
+
+        // Copy to array first to avoid modifying Set during iteration
+        const eventsToDelete = [...typeSet];
+        for (const event of eventsToDelete) {
+            this._markDeleted(event);
+        }
+        this.byType.delete(type);
     }
 
+    // Optimized clearMatching - tries to use indexes when possible
     clearMatching(fn) {
         let cleared = false;
-        let heapEvents = this.minHeap.toArray();
+
+        // We still need to iterate, but use lazy deletion
+        const heapEvents = this.minHeap.toArray();
 
         for (const event of heapEvents) {
+            if (this.deleted.has(event)) continue;
             if (fn(event)) {
-                this.minHeap.remove(event);
+                this._markDeleted(event);
                 cleared = true;
             }
         }
         return cleared;
     }
 
-    getMatching(fn) {
-        let heapEvents = this.minHeap.toArray(); 
-    
-        for (const event of heapEvents) {
-            if (fn(event)) {
-                return event; 
+    // Optimized: clear by type and source (common pattern)
+    clearByTypeAndSource(type, source) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return false;
+
+        let cleared = false;
+        // Copy to array first to avoid modifying Set during iteration
+        const eventsToCheck = [...typeSet];
+        for (const event of eventsToCheck) {
+            if (event.source === source) {
+                this._markDeleted(event);
+                cleared = true;
             }
         }
-    
-        return null; 
+        return cleared;
+    }
+
+    // Optimized: clear by type and target (common pattern)
+    clearByTypeAndTarget(type, target) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return false;
+
+        let cleared = false;
+        // Copy to array first to avoid modifying Set during iteration
+        const eventsToCheck = [...typeSet];
+        for (const event of eventsToCheck) {
+            if (event.target === target) {
+                this._markDeleted(event);
+                cleared = true;
+            }
+        }
+        return cleared;
+    }
+
+    // Optimized getMatching - tries to use indexes when possible
+    getMatching(fn) {
+        const heapEvents = this.minHeap.toArray();
+
+        for (const event of heapEvents) {
+            if (this.deleted.has(event)) continue;
+            if (fn(event)) {
+                return event;
+            }
+        }
+        return null;
+    }
+
+    // Optimized: get by type and source (common pattern)
+    getByTypeAndSource(type, source) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return null;
+
+        for (const event of typeSet) {
+            if (event.source === source) {
+                return event;
+            }
+        }
+        return null;
+    }
+
+    // Optimized: get by type and target
+    getByTypeAndTarget(type, target) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return null;
+
+        for (const event of typeSet) {
+            if (event.target === target) {
+                return event;
+            }
+        }
+        return null;
+    }
+
+    // Check if any event matches type and source exists
+    hasEventOfTypeAndSource(type, source) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return false;
+
+        for (const event of typeSet) {
+            if (event.source === source) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Optimized: clear by type and hrid (for PlayerRespawnEvent)
+    clearByTypeAndHrid(type, hrid) {
+        const typeSet = this.byType.get(type);
+        if (!typeSet) return false;
+
+        let cleared = false;
+        // Copy to array first to avoid modifying Set during iteration
+        const eventsToCheck = [...typeSet];
+        for (const event of eventsToCheck) {
+            if (event.hrid === hrid) {
+                this._markDeleted(event);
+                cleared = true;
+            }
+        }
+        return cleared;
     }
 }
 
@@ -4359,7 +4689,7 @@ class SimResult {
     // 添加时间序列数据点
     addTimeSeriesSnapshot(time, players) {
         this.timeSeriesData.timestamps.push(time);
-        
+
         players.forEach(player => {
             if (!this.timeSeriesData.players[player.hrid]) {
                 this.timeSeriesData.players[player.hrid] = {
@@ -4369,13 +4699,178 @@ class SimResult {
                     maxMp: []
                 };
             }
-            
+
             const playerData = this.timeSeriesData.players[player.hrid];
             playerData.hp.push(player.combatDetails.currentHitpoints);
             playerData.mp.push(player.combatDetails.currentManapoints);
             playerData.maxHp.push(player.combatDetails.maxHitpoints);
             playerData.maxMp.push(player.combatDetails.maxManapoints);
         });
+    }
+
+    // 合并另一个 SimResult 的数据（用于并行模拟结果合并）
+    merge(other) {
+        // 合并 deaths
+        for (const [key, value] of Object.entries(other.deaths)) {
+            this.deaths[key] = (this.deaths[key] || 0) + value;
+        }
+
+        // 合并 experienceGained
+        for (const [playerHrid, expData] of Object.entries(other.experienceGained)) {
+            if (!this.experienceGained[playerHrid]) {
+                this.experienceGained[playerHrid] = {
+                    stamina: 0, intelligence: 0, attack: 0,
+                    melee: 0, defense: 0, ranged: 0, magic: 0
+                };
+            }
+            for (const [stat, value] of Object.entries(expData)) {
+                this.experienceGained[playerHrid][stat] += value;
+            }
+        }
+
+        // 合并 encounters
+        this.encounters += other.encounters;
+
+        // 合并 attacks (深度嵌套对象)
+        for (const [sourceHrid, targets] of Object.entries(other.attacks)) {
+            if (!this.attacks[sourceHrid]) {
+                this.attacks[sourceHrid] = {};
+            }
+            for (const [targetHrid, abilities] of Object.entries(targets)) {
+                if (!this.attacks[sourceHrid][targetHrid]) {
+                    this.attacks[sourceHrid][targetHrid] = {};
+                }
+                for (const [ability, hits] of Object.entries(abilities)) {
+                    if (!this.attacks[sourceHrid][targetHrid][ability]) {
+                        this.attacks[sourceHrid][targetHrid][ability] = {};
+                    }
+                    for (const [hit, count] of Object.entries(hits)) {
+                        this.attacks[sourceHrid][targetHrid][ability][hit] =
+                            (this.attacks[sourceHrid][targetHrid][ability][hit] || 0) + count;
+                    }
+                }
+            }
+        }
+
+        // 合并 consumablesUsed
+        for (const [unitHrid, consumables] of Object.entries(other.consumablesUsed)) {
+            if (!this.consumablesUsed[unitHrid]) {
+                this.consumablesUsed[unitHrid] = {};
+            }
+            for (const [consumableHrid, count] of Object.entries(consumables)) {
+                this.consumablesUsed[unitHrid][consumableHrid] =
+                    (this.consumablesUsed[unitHrid][consumableHrid] || 0) + count;
+            }
+        }
+
+        // 合并 hitpointsGained
+        for (const [unitHrid, sources] of Object.entries(other.hitpointsGained)) {
+            if (!this.hitpointsGained[unitHrid]) {
+                this.hitpointsGained[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.hitpointsGained[unitHrid][source] =
+                    (this.hitpointsGained[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 manapointsGained
+        for (const [unitHrid, sources] of Object.entries(other.manapointsGained)) {
+            if (!this.manapointsGained[unitHrid]) {
+                this.manapointsGained[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.manapointsGained[unitHrid][source] =
+                    (this.manapointsGained[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 hitpointsSpent
+        for (const [unitHrid, sources] of Object.entries(other.hitpointsSpent)) {
+            if (!this.hitpointsSpent[unitHrid]) {
+                this.hitpointsSpent[unitHrid] = {};
+            }
+            for (const [source, amount] of Object.entries(sources)) {
+                this.hitpointsSpent[unitHrid][source] =
+                    (this.hitpointsSpent[unitHrid][source] || 0) + amount;
+            }
+        }
+
+        // 合并 manaUsed
+        for (const [unitHrid, abilities] of Object.entries(other.manaUsed)) {
+            if (!this.manaUsed[unitHrid]) {
+                this.manaUsed[unitHrid] = {};
+            }
+            for (const [abilityHrid, amount] of Object.entries(abilities)) {
+                this.manaUsed[unitHrid][abilityHrid] =
+                    (this.manaUsed[unitHrid][abilityHrid] || 0) + amount;
+            }
+        }
+
+        // 合并地下城统计
+        this.dungeonsCompleted += other.dungeonsCompleted;
+        this.dungeonsFailed += other.dungeonsFailed;
+        this.simulatedTime = (this.simulatedTime || 0) + (other.simulatedTime || 0);
+
+        // 合并 maxWaveReached (取最大值)
+        this.maxWaveReached = Math.max(this.maxWaveReached, other.maxWaveReached);
+
+        // 合并 maxEnrageStack (取最大值)
+        this.maxEnrageStack = Math.max(this.maxEnrageStack, other.maxEnrageStack);
+
+        // 合并 minDungenonTime (取最小非零值)
+        if (other.minDungenonTime > 0) {
+            if (this.minDungenonTime === 0 || other.minDungenonTime < this.minDungenonTime) {
+                this.minDungenonTime = other.minDungenonTime;
+            }
+        }
+
+        // 合并 timeSpentAlive
+        for (const otherEntry of other.timeSpentAlive) {
+            const existingIndex = this.timeSpentAlive.findIndex(e => e.name === otherEntry.name);
+            if (existingIndex !== -1) {
+                this.timeSpentAlive[existingIndex].timeSpentAlive += otherEntry.timeSpentAlive;
+                this.timeSpentAlive[existingIndex].count += otherEntry.count;
+            } else {
+                this.timeSpentAlive.push({ ...otherEntry });
+            }
+        }
+
+        // 合并 wipeEvents
+        this.wipeEvents = this.wipeEvents.concat(other.wipeEvents);
+
+        // 合并 playerRanOutOfMana (任一为 true 则为 true)
+        for (const [playerHrid, value] of Object.entries(other.playerRanOutOfMana)) {
+            if (value) {
+                this.playerRanOutOfMana[playerHrid] = true;
+            }
+        }
+
+        // 合并 playerRanOutOfManaTime
+        for (const [playerHrid, data] of Object.entries(other.playerRanOutOfManaTime)) {
+            if (!this.playerRanOutOfManaTime[playerHrid]) {
+                this.playerRanOutOfManaTime[playerHrid] = {
+                    isOutOfMana: false,
+                    startTimeForOutOfMana: 0,
+                    totalTimeForOutOfMana: 0
+                };
+            }
+            this.playerRanOutOfManaTime[playerHrid].totalTimeForOutOfMana += data.totalTimeForOutOfMana;
+        }
+
+        // 保留第一个结果的 dropRateMultiplier, rareFindMultiplier, combatDropQuantity, debuffOnLevelGap
+        // 这些值在同一配置下应该相同，不需要合并
+        if (Object.keys(this.dropRateMultiplier).length === 0) {
+            this.dropRateMultiplier = other.dropRateMultiplier;
+            this.rareFindMultiplier = other.rareFindMultiplier;
+            this.combatDropQuantity = other.combatDropQuantity;
+            this.debuffOnLevelGap = other.debuffOnLevelGap;
+        }
+
+        // bossSpawns 只需保留一份（相同配置下应该相同）
+        if (this.bossSpawns.length === 0) {
+            this.bossSpawns = other.bossSpawns;
+        }
     }
 }
 
@@ -4722,50 +5217,55 @@ __webpack_require__.r(__webpack_exports__);
 
 
 
+// 创建 extraBuffs 的辅助函数
+function createExtraBuffs(extra) {
+    let extraBuffs = [];
+    if (extra.mooPass) {
+        const mooPassBuff = {
+            "uniqueHrid": "/buff_uniques/experience_moo_pass_buff",
+            "typeHrid": "/buff_types/wisdom",
+            "ratioBoost": 0,
+            "ratioBoostLevelBonus": 0,
+            "flatBoost": 0.05,
+            "flatBoostLevelBonus": 0,
+            "startTime": "0001-01-01T00:00:00Z",
+            "duration": 0
+        };
+        extraBuffs.push(mooPassBuff);
+    }
+    if (extra.comExp > 0) {
+        const comExpBuff = {
+            "uniqueHrid": "/buff_uniques/experience_community_buff",
+            "typeHrid": "/buff_types/wisdom",
+            "ratioBoost": 0,
+            "ratioBoostLevelBonus": 0,
+            "flatBoost": 0.005 * (extra.comExp - 1) + 0.2,
+            "flatBoostLevelBonus": 0,
+            "startTime": "0001-01-01T00:00:00Z",
+            "duration": 0
+        };
+        extraBuffs.push(comExpBuff);
+    }
+    if (extra.comDrop > 0) {
+        const comDropBuff = {
+            "uniqueHrid": "/buff_uniques/combat_community_buff",
+            "typeHrid": "/buff_types/combat_drop_quantity",
+            "ratioBoost": 0,
+            "ratioBoostLevelBonus": 0,
+            "flatBoost": 0.005 * (extra.comDrop - 1) + 0.2,
+            "flatBoostLevelBonus": 0,
+            "startTime": "0001-01-01T00:00:00Z",
+            "duration": 0
+        };
+        extraBuffs.push(comDropBuff);
+    }
+    return extraBuffs;
+}
 
 onmessage = async function (event) {
     switch (event.data.type) {
-        case "start_simulation":
-            let extraBuffs = [];
-            if (event.data.extra.mooPass) {
-                const mooPassBuff = {
-                    "uniqueHrid": "/buff_uniques/experience_moo_pass_buff",
-                    "typeHrid": "/buff_types/wisdom",
-                    "ratioBoost": 0,
-                    "ratioBoostLevelBonus": 0,
-                    "flatBoost": 0.05,
-                    "flatBoostLevelBonus": 0,
-                    "startTime": "0001-01-01T00:00:00Z",
-                    "duration": 0
-                };
-                extraBuffs.push(mooPassBuff);
-            }
-            if (event.data.extra.comExp > 0) {
-                const comExpBuff = {
-                    "uniqueHrid": "/buff_uniques/experience_community_buff",
-                    "typeHrid": "/buff_types/wisdom",
-                    "ratioBoost": 0,
-                    "ratioBoostLevelBonus": 0,
-                    "flatBoost": 0.005 * (event.data.extra.comExp - 1) + 0.2,
-                    "flatBoostLevelBonus": 0,
-                    "startTime": "0001-01-01T00:00:00Z",
-                    "duration": 0
-                };
-                extraBuffs.push(comExpBuff);
-            }
-            if (event.data.extra.comDrop > 0) {
-                const comDropBuff = {
-                    "uniqueHrid": "/buff_uniques/combat_community_buff",
-                    "typeHrid": "/buff_types/combat_drop_quantity",
-                    "ratioBoost": 0,
-                    "ratioBoostLevelBonus": 0,
-                    "flatBoost": 0.005 * (event.data.extra.comDrop - 1) + 0.2,
-                    "flatBoostLevelBonus": 0,
-                    "startTime": "0001-01-01T00:00:00Z",
-                    "duration": 0
-                };
-                extraBuffs.push(comDropBuff);
-            }
+        case "start_simulation": {
+            let extraBuffs = createExtraBuffs(event.data.extra);
 
             let playersData = event.data.players;
             let players = [];
@@ -4780,10 +5280,10 @@ onmessage = async function (event) {
             let enableHpMpVisualization = event.data.extra.enableHpMpVisualization || false;
             let combatSimulator = new _combatsimulator_combatSimulator__WEBPACK_IMPORTED_MODULE_0__["default"](players, zone, { enableHpMpVisualization });
             combatSimulator.addEventListener("progress", (event) => {
-                this.postMessage({ 
-                    type: "simulation_progress", 
-                    progress: event.detail.progress, 
-                    zone: event.detail.zone, 
+                this.postMessage({
+                    type: "simulation_progress",
+                    progress: event.detail.progress,
+                    zone: event.detail.zone,
                     difficultyTier: event.detail.difficultyTier,
                     timeSeriesData: event.detail.timeSeriesData
                 });
@@ -4797,6 +5297,42 @@ onmessage = async function (event) {
                 this.postMessage({ type: "simulation_error", error: e });
             }
             break;
+        }
+
+        case "start_dungeon_by_count": {
+            // 按次数模拟地下城
+            let extraBuffs = createExtraBuffs(event.data.extra);
+
+            let playersData = event.data.players;
+            let players = [];
+            let zone = new _combatsimulator_zone__WEBPACK_IMPORTED_MODULE_2__["default"](event.data.zone.zoneHrid, event.data.zone.difficultyTier);
+            for (let i = 0; i < playersData.length; i++) {
+                let currentPlayer = _combatsimulator_player__WEBPACK_IMPORTED_MODULE_1__["default"].createFromDTO(structuredClone(playersData[i]));
+                currentPlayer.zoneBuffs = zone.buffs;
+                currentPlayer.extraBuffs = extraBuffs;
+                players.push(currentPlayer);
+            }
+
+            let targetCount = event.data.targetCount;
+            let combatSimulator = new _combatsimulator_combatSimulator__WEBPACK_IMPORTED_MODULE_0__["default"](players, zone, { enableHpMpVisualization: false });
+
+            const outer_worker = this;
+            try {
+                let simResult = await combatSimulator.simulateDungeonByCount(targetCount, (progressData) => {
+                    outer_worker.postMessage({
+                        type: "simulation_progress",
+                        progress: progressData.progress,
+                        zone: progressData.zone,
+                        difficultyTier: progressData.difficultyTier
+                    });
+                });
+                this.postMessage({ type: "simulation_result", simResult: simResult });
+            } catch (e) {
+                console.log(e);
+                this.postMessage({ type: "simulation_error", error: e.message || e });
+            }
+            break;
+        }
     }
 };
 

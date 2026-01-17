@@ -73,7 +73,8 @@
         "averageTime": "Average Time",
         "minimumTime": "Minimum Time",
         "maxEnrageStack": "Max Stack of Enrage",
-        "debuffOnLevelGap": "Debuff on Level Gap"
+        "debuffOnLevelGap": "Debuff on Level Gap",
+        "teamDps": "Team DPS"
     },
     "selectPlayer": "SelectPlayer",
     "selectAllOrNot": "Select / Deselect All",

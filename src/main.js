@@ -1278,6 +1278,7 @@ function showSimulationResult(simResult) {
     showManapointsGained(simResult, playerToDisplay);
     showDamageDone(simResult, playerToDisplay);
     showDamageTaken(simResult, playerToDisplay);
+    showTeamDps(simResult);
     renderWipeEvents(simResult);
     window.profit = window.revenue - window.expenses;
     document.getElementById('profitSpan').innerText = window.profit.toLocaleString();
@@ -2683,6 +2684,32 @@ function createDamageTable(resultDiv, damageDone, secondsSimulated) {
     }
 
     resultDiv.replaceChildren(...newChildren);
+}
+
+function showTeamDps(simResult) {
+    let totalTeamDamage = 0;
+    let totalSecondsSimulated = simResult.simulatedTime / ONE_SECOND;
+
+    // 遍历所有玩家的攻击数据
+    for (const [sourceHrid, targets] of Object.entries(simResult.attacks)) {
+        // 只统计玩家的伤害 (player1, player2, etc.)
+        if (!sourceHrid.startsWith('player')) {
+            continue;
+        }
+
+        for (const [targetHrid, abilities] of Object.entries(targets)) {
+            for (const [ability, abilityCasts] of Object.entries(abilities)) {
+                // 计算该技能的总伤害
+                let damage = Object.entries(abilityCasts)
+                    .filter((entry) => entry[0] != "miss")
+                    .reduce((prev, cur) => prev + Number(cur[0]) * cur[1], 0);
+                totalTeamDamage += damage;
+            }
+        }
+    }
+
+    let teamDps = (totalTeamDamage / totalSecondsSimulated).toFixed(2);
+    document.getElementById('teamDpsValue').innerText = teamDps;
 }
 
 function createRow(columnClassNames, columnValues) {

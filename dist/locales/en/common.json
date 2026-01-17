@@ -73,7 +73,8 @@
         "averageTime": "Average Time",
         "minimumTime": "Minimum Time",
         "maxEnrageStack": "Max Stack of Enrage",
-        "debuffOnLevelGap": "Debuff on Level Gap"
+        "debuffOnLevelGap": "Debuff on Level Gap",
+        "teamDps": "Team DPS"
     },
     "selectPlayer": "SelectPlayer",
     "selectAllOrNot": "Select / Deselect All",
@@ -82,6 +83,8 @@
     "simAllSolos": "Sim All Solos",
     "selectSolo": "Select Solo Target",
     "simDungeon": "Sim Dungeon",
+    "dungeonCount": "Dungeon Count",
+    "parallelCount": "Parallel Workers",
     "simulationSettings": "Simulation Settings",
     "allZonesData": "All Zones Data",
     "simulateAllZonesResults" : "Simulate All Zones Results",

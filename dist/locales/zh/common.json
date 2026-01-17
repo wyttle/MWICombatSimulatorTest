@@ -73,7 +73,8 @@
         "averageTime": "平均完成时间",
         "minimumTime": "最短完成时间",
         "maxEnrageStack": "最大狂暴层数",
-        "debuffOnLevelGap": "等级差距惩罚"
+        "debuffOnLevelGap": "等级差距惩罚",
+        "teamDps": "队伍DPS (秒伤)"
     },
     "selectPlayer": "选择玩家",
     "selectAllOrNot" : "全选/取消全选",
@@ -81,6 +82,8 @@
     "simAllSolos": "模拟所有单刷",
     "selectSolo": "选择单人目标",
     "simDungeon": "模拟地下城",
+    "dungeonCount": "模拟次数",
+    "parallelCount": "并行线程数",
     "simulationSettings": "模拟配置",
     "allZonesData": "批量模拟数据",
     "simulateAllZonesResults" : "批量模拟结果",
