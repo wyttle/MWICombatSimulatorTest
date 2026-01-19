@@ -421,7 +421,20 @@
         'Off Hand': 'characterItemsUtil.offHand',
         'Pouch': 'characterItemsUtil.pouch',
         'Back': 'characterItemsUtil.back',
-        'Charm': 'characterItemsUtil.charm'
+        'Charm': 'characterItemsUtil.charm',
+        // Simulation Settings
+        'Zone': 'party.selectZone',
+        'Dungeon': 'shopCategoryNames./shop_categories/dungeon',
+        'Difficulty': 'party.difficulty',
+        'Duration': 'skillActionDetail.duration',
+        // Enhancement/Level (for equipment and abilities)
+        'Enhancement': 'marketplacePanel.enhancementLevel',
+        'Level': 'leaderboardPanel.level',
+        // Ability/Food/Drink
+        'Special Ability': 'ability.specialAbility',
+        'Ability': 'ability.ability',
+        'Food': 'consumableSlot.food',
+        'Drink': 'consumableSlot.drink'
     };
 
     // Reverse mapping from i18n key to English name
@@ -1155,8 +1168,28 @@ function normalizeAndParseFloat(s) {
         const container = document.createElement('div');
         container.className = isHouse ? 'house-grid-item' : 'batch-input-row';
         const label = document.createElement('label');
-        label.textContent = name;
-        label.title = name;
+
+        // Special handling for Multiplier (uses JIGS translation, not game i18n)
+        if (name === 'Multiplier') {
+            label.textContent = t('multiplier');
+            label.setAttribute('data-jigs-multiplier', 'true');
+        } else {
+            // Add data-i18n attribute if mapping exists
+            const i18nKey = nameToI18nMap[name];
+            if (i18nKey) {
+                label.setAttribute('data-i18n', i18nKey);
+                // Set initial text using i18next if available
+                if (typeof i18next !== 'undefined') {
+                    label.textContent = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+                } else {
+                    label.textContent = name;
+                }
+            } else {
+                label.textContent = name;
+            }
+        }
+        label.title = label.textContent;
+
         const input = document.createElement('input');
         input.type = 'number';
         input.value = value;
@@ -1177,8 +1210,41 @@ function normalizeAndParseFloat(s) {
         const row = document.createElement('div');
         row.className = 'batch-input-row';
         const label = document.createElement('label');
-        label.textContent = name;
-        label.title = name;
+
+        // Check if this is a food/drink item (e.g., "food 1", "drink 2")
+        const foodDrinkMatch = name.match(/^(food|drink)\s+(\d+)$/i);
+        if (foodDrinkMatch) {
+            const type = foodDrinkMatch[1].toLowerCase();
+            const index = foodDrinkMatch[2];
+            const i18nKey = type === 'food' ? nameToI18nMap['Food'] : nameToI18nMap['Drink'];
+
+            if (i18nKey && typeof i18next !== 'undefined') {
+                const typeText = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+                label.textContent = `${typeText} ${index}`;
+            } else {
+                label.textContent = `${type === 'food' ? 'Food' : 'Drink'} ${index}`;
+            }
+            // Set special attributes for numbered items
+            label.setAttribute('data-jigs-consumable-type', type);
+            label.setAttribute('data-jigs-consumable-index', index);
+            label.setAttribute('data-jigs-consumable-i18n', i18nKey);
+        } else {
+            // Regular select with i18n mapping
+            const i18nKey = nameToI18nMap[name];
+            if (i18nKey) {
+                label.setAttribute('data-i18n', i18nKey);
+                // Set initial text using i18next if available
+                if (typeof i18next !== 'undefined') {
+                    label.textContent = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+                } else {
+                    label.textContent = name;
+                }
+            } else {
+                label.textContent = name;
+            }
+        }
+        label.title = label.textContent;
+
         const select = document.createElement('select');
         select.dataset.originalValue = value;
         select.dataset.name = name;
@@ -1202,8 +1268,22 @@ function normalizeAndParseFloat(s) {
         const row = document.createElement('div');
         row.className = 'batch-input-row-equip';
         const label = document.createElement('label');
-        label.textContent = name;
-        label.title = name;
+
+        // Add data-i18n attribute if mapping exists
+        const i18nKey = nameToI18nMap[name];
+        if (i18nKey) {
+            label.setAttribute('data-i18n', i18nKey);
+            // Set initial text using i18next if available
+            if (typeof i18next !== 'undefined') {
+                label.textContent = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+            } else {
+                label.textContent = name;
+            }
+        } else {
+            label.textContent = name;
+        }
+        label.title = label.textContent;
+
         const itemSelect = document.createElement('select');
         itemSelect.dataset.originalValue = itemValue;
         itemSelect.dataset.name = name;
@@ -1212,6 +1292,10 @@ function normalizeAndParseFloat(s) {
             // Store English name as value, display text as textContent
             option.value = typeof opt === 'object' ? opt.value : opt;
             option.textContent = typeof opt === 'object' ? opt.text : opt;
+            // Preserve data-i18n attribute for automatic translation
+            if (typeof opt === 'object' && opt.i18nKey) {
+                option.setAttribute('data-i18n', opt.i18nKey);
+            }
             itemSelect.appendChild(option);
         });
         itemSelect.value = itemValue;
@@ -1252,8 +1336,36 @@ function normalizeAndParseFloat(s) {
         const row = document.createElement('div');
         row.className = 'batch-input-row-ability';
         const label = document.createElement('label');
-        label.textContent = name;
-        label.title = name;
+
+        // Parse ability index from name (e.g., "Ability 1" -> index 1)
+        const abilityIndex = parseInt(name.split(' ')[1]);
+
+        // First ability (Ability 1, index 1) is "Special Ability"
+        // Others (Ability 2-5, index 2-5) are "Ability 1-4"
+        if (abilityIndex === 1) {
+            const i18nKey = nameToI18nMap['Special Ability'];
+            label.setAttribute('data-i18n', i18nKey);
+            if (typeof i18next !== 'undefined') {
+                label.textContent = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+            } else {
+                label.textContent = 'Special Ability';
+            }
+        } else {
+            // For Ability 2-5, show as "Ability 1-4" (技能 1-4)
+            const displayIndex = abilityIndex - 1;
+            const i18nKey = nameToI18nMap['Ability'];
+            if (i18nKey && typeof i18next !== 'undefined') {
+                const abilityText = i18next.t(i18nKey).replace(/<br\s*\/?>/gi, ' ').trim();
+                label.textContent = `${abilityText} ${displayIndex}`;
+            } else {
+                label.textContent = `Ability ${displayIndex}`;
+            }
+            // Set data-i18n with special format for numbered items
+            label.setAttribute('data-jigs-ability-index', displayIndex);
+            label.setAttribute('data-jigs-ability-i18n', i18nKey);
+        }
+        label.title = label.textContent;
+
         const itemSelect = document.createElement('select');
         itemSelect.dataset.originalValue = itemValue;
         itemSelect.dataset.name = name;
@@ -1263,6 +1375,10 @@ function normalizeAndParseFloat(s) {
                 // Store English name as value, display text as textContent
                 option.value = typeof opt === 'object' ? opt.value : opt;
                 option.textContent = typeof opt === 'object' ? opt.text : opt;
+                // Preserve data-i18n attribute for automatic translation
+                if (typeof opt === 'object' && opt.i18nKey) {
+                    option.setAttribute('data-i18n', opt.i18nKey);
+                }
                 itemSelect.appendChild(option);
             }
         });
@@ -1705,7 +1821,8 @@ function normalizeAndParseFloat(s) {
             const li = document.createElement('li');
 
             const labelSpan = document.createElement('span');
-            labelSpan.textContent = item.label;
+            // Dynamically generate label based on current language
+            labelSpan.textContent = generateQueueLabel(item.upgrades) || item.label;
             labelSpan.className = 'jigs-queue-item-label';
 
             const removeButton = document.createElement('button');
@@ -1759,7 +1876,7 @@ function normalizeAndParseFloat(s) {
             const playerNames = playerTabs.map(tab => tab.textContent.trim());
             const activeTab = playerTabs.find(tab => tab.classList.contains('active'));
             const currentPlayer = activeTab ? activeTab.textContent.trim() : playerNames[0];
-            const playerSelectRow = createSelect(t('selectPlayer'), currentPlayer, playerNames, false);
+            const playerSelectRow = createSelect('SelectPlayer', currentPlayer, playerNames, false, t('selectPlayer'));
             const selectEl = playerSelectRow.querySelector('select');
             if (selectEl) selectEl.id = 'jigs-player-select';
             container.append(...playerSelectRow.childNodes);
@@ -1971,7 +2088,14 @@ function normalizeAndParseFloat(s) {
         let itemsFound = 0;
         houseKeywords = [];
         populatePlayerDropdown();
-        skillKeywords.forEach(name => { const pageEl = findPageElementByName(name); if (pageEl) { groupContainers.skills.appendChild(createNumberInput(name, pageEl.value, pageEl.min, pageEl.max)); jigsNameToPageElementMap.set(name, pageEl); itemsFound++; } });
+        skillKeywords.forEach(name => {
+            const pageEl = findPageElementByName(name);
+            if (pageEl) {
+                groupContainers.skills.appendChild(createNumberInput(name, pageEl.value, pageEl.min, pageEl.max, false, true));
+                jigsNameToPageElementMap.set(name, pageEl);
+                itemsFound++;
+            }
+        });
         equipmentKeywords.forEach(name => {
             const itemSelect = findPageElementByName(name, 'select');
             const enhInput = findPageElementByName(name, 'input');
@@ -1997,7 +2121,8 @@ function normalizeAndParseFloat(s) {
                 const itemValue = getEnglishName(selectedOption);
                 const itemOptions = Array.from(itemSelect.options).map(opt => ({
                     value: getEnglishName(opt),
-                    text: opt.textContent.trim()
+                    text: opt.textContent.trim(),
+                    i18nKey: opt.getAttribute('data-i18n') // Preserve i18n key for dynamic translation
                 }));
                 const enhValue = enhInput.value;
                 const equipmentRow = createEquipmentRow(name, itemValue, itemOptions, enhValue);
@@ -2032,7 +2157,8 @@ function normalizeAndParseFloat(s) {
                 const itemValue = getEnglishAbilityName(selectedOption);
                 const itemOptions = Array.from(abilitySelect.options).map(opt => ({
                     value: getEnglishAbilityName(opt),
-                    text: opt.textContent.trim()
+                    text: opt.textContent.trim(),
+                    i18nKey: opt.getAttribute('data-i18n') // Preserve i18n key for dynamic translation
                 }));
                 const lvlValue = levelInput.value;
                 groupContainers.abilities.appendChild(createAbilityRow(name, itemValue, itemOptions, lvlValue));
@@ -2049,7 +2175,7 @@ function normalizeAndParseFloat(s) {
             const name = `${type} ${indexFromId + 1}`;
             const currentValue = el.options[el.selectedIndex].text;
             const options = Array.from(el.options).map(opt => opt.text);
-            groupContainers.food.appendChild(createSelect(name, currentValue, options));
+            groupContainers.food.appendChild(createSelect(name, currentValue, options, true));
             groupContainers.food.appendChild(createTriggerRow(type, indexFromId));
             jigsNameToPageElementMap.set(name, el);
             itemsFound++;
@@ -2061,7 +2187,7 @@ function normalizeAndParseFloat(s) {
                 const name = labelEl.textContent.trim();
                 if (excludedRooms.includes(name)) return;
                 houseKeywords.push(name);
-                groupContainers.house.appendChild(createNumberInput(name, inputEl.value, inputEl.min, inputEl.max, true));
+                groupContainers.house.appendChild(createNumberInput(name, inputEl.value, inputEl.min, inputEl.max, true, true));
                 jigsNameToPageElementMap.set(name, inputEl);
                 itemsFound++;
             }
@@ -2367,6 +2493,104 @@ if (baselineDisplayDiv) {
         await new Promise(r => setTimeout(r, 100));
     }
 
+    // Generate label for queue item based on upgrades
+    function generateQueueLabel(upgrades) {
+        let labelParts = [];
+        for (const upgrade of upgrades) {
+            let partLabel = upgrade.customLabel || '';
+            if (!partLabel) {
+                if (!upgrade.isTriggerOnly) {
+                    const baseName = upgrade.name;
+                    const isConsumableOrAbility = baseName.startsWith('Ability') || baseName.startsWith('Food') || baseName.startsWith('Drink');
+                    const itemChanged = upgrade.value && upgrade.originalValue && upgrade.value !== upgrade.originalValue;
+                    const enhChanged = upgrade.enhancement;
+                    const levelChanged = upgrade.level;
+
+                    if (itemChanged) {
+                        partLabel = isConsumableOrAbility ? `${upgrade.originalValue} -> ${upgrade.value}` : `${baseName}: ${upgrade.originalValue} -> ${upgrade.value}`;
+                    }
+
+                    if (enhChanged) {
+                        // For equipment, get the actual selected item name (not the slot label)
+                        let staticItemName = upgrade.value;
+                        const jigsElement = document.querySelector(`#batch-inputs-container [data-name="${baseName}"]`);
+                        if (jigsElement && jigsElement.tagName === 'SELECT') {
+                            // Get the currently selected option's text (the actual equipment name)
+                            const selectedOption = jigsElement.options[jigsElement.selectedIndex];
+                            if (selectedOption && selectedOption.text && selectedOption.text !== 'Empty') {
+                                staticItemName = selectedOption.text.trim();
+                            }
+                        } else if (jigsElement) {
+                            staticItemName = jigsElement.dataset.originalValue;
+                        }
+                        // Use translated "Enhancement" label
+                        const enhI18nKey = nameToI18nMap['Enhancement'];
+                        const enhLabel = (enhI18nKey && typeof i18next !== 'undefined')
+                            ? i18next.t(enhI18nKey).replace(/<br\s*\/?>/gi, ' ').trim()
+                            : 'Enhancement';
+                        let enhText = `${enhLabel} ${upgrade.enhancement.originalValue} -> ${upgrade.enhancement.value}`;
+                        partLabel = itemChanged ? `${partLabel} & ${enhText}` : `${staticItemName}: ${enhText}`;
+                    } else if (levelChanged) {
+                        // For abilities/food/drink, get the actual selected item name (not the slot label)
+                        let staticItemName = upgrade.value;
+                        const jigsElement = document.querySelector(`#batch-inputs-container [data-name="${baseName}"]`);
+                        if (jigsElement && jigsElement.tagName === 'SELECT') {
+                            // Get the currently selected option's text (the actual ability/food/drink name)
+                            const selectedOption = jigsElement.options[jigsElement.selectedIndex];
+                            if (selectedOption && selectedOption.text && selectedOption.text !== 'Empty') {
+                                staticItemName = selectedOption.text.trim();
+                            }
+                        } else if (jigsElement) {
+                            staticItemName = jigsElement.dataset.originalValue;
+                        }
+                        // Use translated "Level" label
+                        const levelI18nKey = nameToI18nMap['Level'];
+                        const levelLabel = (levelI18nKey && typeof i18next !== 'undefined')
+                            ? i18next.t(levelI18nKey).replace(/<br\s*\/?>/gi, ' ').trim()
+                            : 'Level';
+                        let levelText = `${levelLabel} ${upgrade.level.originalValue} -> ${upgrade.level.value}`;
+                        partLabel = itemChanged ? `${partLabel} & ${levelText}` : `${staticItemName}: ${levelText}`;
+                    }
+                }
+                if (upgrade.triggerChange) {
+                    let triggerLabel = 'Trigger Change';
+                     if (upgrade.triggerChange.data && upgrade.triggerChange.data.value) {
+                        triggerLabel += ` (Val: ${upgrade.triggerChange.data.value})`;
+                    }
+                    if (!upgrade.isTriggerOnly) {
+                        // Get the actual item name for non-trigger-only changes
+                        let triggerBaseName = upgrade.value;
+                        const jigsElement = document.querySelector(`#batch-inputs-container [data-name="${upgrade.name}"]`);
+                        if (jigsElement && jigsElement.tagName === 'SELECT') {
+                            const selectedOption = jigsElement.options[jigsElement.selectedIndex];
+                            if (selectedOption && selectedOption.text && selectedOption.text !== 'Empty') {
+                                triggerBaseName = selectedOption.text.trim();
+                            }
+                        } else if (jigsElement) {
+                            triggerBaseName = jigsElement.dataset.originalValue;
+                        }
+                        triggerLabel = `${triggerBaseName} ${triggerLabel}`;
+                    } else {
+                        const tc = upgrade.triggerChange;
+                        const jigsName = `${tc.type.charAt(0).toUpperCase() + tc.type.slice(1)} ${parseInt(tc.index) + 1}`;
+                        const associatedSelect = document.querySelector(`#batch-inputs-container [data-name="${jigsName}"]`);
+                        if (associatedSelect && associatedSelect.tagName === 'SELECT') {
+                            const selectedOption = associatedSelect.options[associatedSelect.selectedIndex];
+                            if (selectedOption && selectedOption.text && selectedOption.text !== 'Empty') {
+                                triggerLabel = `${selectedOption.text.trim()} ${triggerLabel}`;
+                            }
+                        } else if (associatedSelect) {
+                            triggerLabel = `${associatedSelect.value} ${triggerLabel}`;
+                        }
+                    }
+                    partLabel = partLabel ? `${partLabel} & ${triggerLabel}` : triggerLabel;
+                }
+            }
+            if(partLabel) labelParts.push(partLabel);
+        }
+        return labelParts.filter(p => p).join(' & ');
+    }
+
     function addChangesToQueue() {
         let allChanges = [];
         document.querySelectorAll("#batch-inputs-container input:not([type=checkbox]), #batch-inputs-container select").forEach(el => {
@@ -2425,62 +2649,12 @@ if (baselineDisplayDiv) {
             return;
         }
 
-        const generateLabel = (upgrades) => {
-            let labelParts = [];
-            for (const upgrade of upgrades) {
-                let partLabel = upgrade.customLabel || '';
-                if (!partLabel) {
-                    if (!upgrade.isTriggerOnly) {
-                        const baseName = upgrade.name;
-                        const isConsumableOrAbility = baseName.startsWith('Ability') || baseName.startsWith('Food') || baseName.startsWith('Drink');
-                        const itemChanged = upgrade.value && upgrade.originalValue && upgrade.value !== upgrade.originalValue;
-                        const enhChanged = upgrade.enhancement;
-                        const levelChanged = upgrade.level;
-
-                        if (itemChanged) {
-                            partLabel = isConsumableOrAbility ? `${upgrade.originalValue} -> ${upgrade.value}` : `${baseName}: ${upgrade.originalValue} -> ${upgrade.value}`;
-                        }
-
-                        if (enhChanged) {
-                            const staticItemName = upgrade.value || document.querySelector(`#batch-inputs-container [data-name="${baseName}"]`)?.dataset.originalValue;
-                            let enhLabel = `Enh ${upgrade.enhancement.originalValue} -> ${upgrade.enhancement.value}`;
-                            partLabel = itemChanged ? `${partLabel} & ${enhLabel}` : `${staticItemName}: ${enhLabel}`;
-                        } else if (levelChanged) {
-                            const staticItemName = upgrade.value || document.querySelector(`#batch-inputs-container [data-name="${baseName}"]`)?.dataset.originalValue;
-                            let levelLabel = `Lvl ${upgrade.level.originalValue} -> ${upgrade.level.value}`;
-                            partLabel = itemChanged ? `${partLabel} & ${levelLabel}` : `${staticItemName}: ${levelLabel}`;
-                        }
-                    }
-                    if (upgrade.triggerChange) {
-                        let triggerLabel = 'Trigger Change';
-                         if (upgrade.triggerChange.data && upgrade.triggerChange.data.value) {
-                            triggerLabel += ` (Val: ${upgrade.triggerChange.data.value})`;
-                        }
-                        if (!upgrade.isTriggerOnly) {
-                            const triggerBaseName = upgrade.value || document.querySelector(`#batch-inputs-container [data-name="${upgrade.name}"]`)?.dataset.originalValue;
-                            triggerLabel = `${triggerBaseName} ${triggerLabel}`;
-                        } else {
-                            const tc = upgrade.triggerChange;
-                            const jigsName = `${tc.type.charAt(0).toUpperCase() + tc.type.slice(1)} ${parseInt(tc.index) + 1}`;
-                            const associatedSelect = document.querySelector(`#batch-inputs-container [data-name="${jigsName}"]`);
-                            if (associatedSelect) {
-                                triggerLabel = `${associatedSelect.value} ${triggerLabel}`;
-                            }
-                        }
-                        partLabel = partLabel ? `${partLabel} & ${triggerLabel}` : triggerLabel;
-                    }
-                }
-                if(partLabel) labelParts.push(partLabel);
-            }
-            return labelParts.filter(p => p).join(' & ');
-        };
-
         const constantUpgrades = allGroupedChanges.filter(c => c.isConstant);
         const individualUpgrades = allGroupedChanges.filter(c => !c.isConstant);
         let itemsAdded = 0;
 
         if (individualUpgrades.length === 0 && constantUpgrades.length > 0) {
-            const queueItem = { upgrades: constantUpgrades, label: generateLabel(constantUpgrades) || t('constantsOnly') };
+            const queueItem = { upgrades: constantUpgrades, label: generateQueueLabel(constantUpgrades) || t('constantsOnly') };
             simulationQueue.push(queueItem);
             itemsAdded = 1;
         } else {
@@ -2500,17 +2674,17 @@ if (baselineDisplayDiv) {
                             simUpgrade.triggerChange.data.value = value;
 
                             const upgrades = [...constantUpgrades, simUpgrade];
-                            simulationQueue.push({ upgrades, label: generateLabel(upgrades) });
+                            simulationQueue.push({ upgrades, label: generateQueueLabel(upgrades) });
                             itemsAdded++;
                         }
                     } else {
                         const upgrades = [...constantUpgrades, individual];
-                        simulationQueue.push({ upgrades, label: generateLabel(upgrades) });
+                        simulationQueue.push({ upgrades, label: generateQueueLabel(upgrades) });
                         itemsAdded++;
                     }
                 } else {
                     const upgrades = [...constantUpgrades, individual];
-                    simulationQueue.push({ upgrades, label: generateLabel(upgrades) });
+                    simulationQueue.push({ upgrades, label: generateQueueLabel(upgrades) });
                     itemsAdded++;
                 }
             }
@@ -3194,6 +3368,42 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
             const span = document.querySelector(selector);
             if (span) span.textContent = t(key);
         });
+
+        // Update special labels that are dynamically generated (abilities with numbers, food/drink with numbers, Multiplier)
+        document.querySelectorAll('#batch-inputs-container label').forEach(label => {
+            // Check if this is an ability label (Ability 2-5, shown as Ability 1-4 with numbers)
+            const abilityIndex = label.getAttribute('data-jigs-ability-index');
+            const abilityI18n = label.getAttribute('data-jigs-ability-i18n');
+            if (abilityIndex && abilityI18n && typeof i18next !== 'undefined') {
+                const abilityText = i18next.t(abilityI18n).replace(/<br\s*\/?>/gi, ' ').trim();
+                label.textContent = `${abilityText} ${abilityIndex}`;
+                label.title = label.textContent;
+                return;
+            }
+
+            // Check if this is a food/drink label (with numbers)
+            const consumableType = label.getAttribute('data-jigs-consumable-type');
+            const consumableIndex = label.getAttribute('data-jigs-consumable-index');
+            const consumableI18n = label.getAttribute('data-jigs-consumable-i18n');
+            if (consumableType && consumableIndex && consumableI18n && typeof i18next !== 'undefined') {
+                const typeText = i18next.t(consumableI18n).replace(/<br\s*\/?>/gi, ' ').trim();
+                label.textContent = `${typeText} ${consumableIndex}`;
+                label.title = label.textContent;
+                return;
+            }
+
+            // Check if this is Multiplier label (uses JIGS translation)
+            if (label.getAttribute('data-jigs-multiplier') === 'true') {
+                label.textContent = t('multiplier');
+                label.title = label.textContent;
+                return;
+            }
+
+            // All other labels with data-i18n will be updated automatically by the game's updateContent()
+        });
+
+        // Regenerate queue labels with new language
+        updateQueuePanelUI();
     }
 
     function setupLanguageChangeListener() {
