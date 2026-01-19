@@ -4,3 +4,4 @@ tmpclaude-*
 .claude/
 dist/
 MWITOOLS/
+LOCAL_OPTIMIZATIONS.md
