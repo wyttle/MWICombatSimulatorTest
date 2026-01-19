@@ -23,7 +23,7 @@
     'use strict';
 
     // --- JIGS-ENVIRONMENT-CHECK ---
-        const jigsAllowedUrls = ["https://shykai.github.io/MWICombatSimulatorTest/dist/", "https://shykai.github.io/MWICombatSimulator/dist/","https://mwi.retard.icu/"];
+        const jigsAllowedUrls = ["https://shykai.github.io/MWICombatSimulatorTest/dist/", "https://shykai.github.io/MWICombatSimulator/dist/","https://mwi.retard.icu/","https://wyttle.github.io/MWICombatSimulatorTest/"];
         if (!jigsAllowedUrls.some(url => window.location.href.startsWith(url))) {alert("JIGS (Jigglymoose's Intelligent Gear Simulator):\n\nThis script is running on the WRONG PAGE.\n\nJIGS is built for the 'shykai' combat simulator, not the main MWI game. Please delete this script for the main game in Steam.  Please reference the installation instructions here -> https://rentry.co/jigs-complete-insturctions");
         return; // Exit script
     }
