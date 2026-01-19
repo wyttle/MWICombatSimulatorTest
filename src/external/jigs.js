@@ -656,7 +656,7 @@ const queuePanel = document.createElement('div');
         #batch-status { margin-bottom: 5px; font-style: italic; color: #aaa; text-align: center; }
         #jigs-progress-container { width: 100%; background-color: #555; border-radius: 5px; height: 10px; margin-bottom: 10px; border: 1px solid #333; }
         #jigs-progress-bar { width: 0%; height: 100%; background-color: #4CAF50; border-radius: 5px; transition: width 0.1s linear; }
-        #batch-inputs-container { display: flex; flex-direction: column; gap: 5px; max-height: 40vh; overflow-y: auto; border: 1px solid #444; padding: 10px; margin-bottom: 10px; }
+        #batch-inputs-container { display: flex; flex-direction: column; gap: 5px; max-height: 70vh; overflow-y: auto; border: 1px solid #444; padding: 10px; margin-bottom: 10px; }
         #jigs-player-select-container { display: grid; grid-template-columns: 100px 1fr; align-items: center; margin-bottom: 10px; gap: 5px; padding-bottom: 10px; border-bottom: 1px solid #444;}
         summary { font-weight: bold; cursor: pointer; padding: 4px; background-color: #333; margin-bottom: 5px; }
         details { border-left: 1px solid #444; padding-left: 10px; margin-bottom: 5px;}
@@ -1169,10 +1169,13 @@ function normalizeAndParseFloat(s) {
         container.className = isHouse ? 'house-grid-item' : 'batch-input-row';
         const label = document.createElement('label');
 
-        // Special handling for Multiplier (uses JIGS translation, not game i18n)
+        // Special handling for JIGS-specific translations (Multiplier, Dungeon Count)
         if (name === 'Multiplier') {
             label.textContent = t('multiplier');
-            label.setAttribute('data-jigs-multiplier', 'true');
+            label.setAttribute('data-jigs-custom', 'multiplier');
+        } else if (name === 'Dungeon Count') {
+            label.textContent = t('dungeonCount');
+            label.setAttribute('data-jigs-custom', 'dungeonCount');
         } else {
             // Add data-i18n attribute if mapping exists
             const i18nKey = nameToI18nMap[name];
@@ -1211,9 +1214,14 @@ function normalizeAndParseFloat(s) {
         row.className = 'batch-input-row';
         const label = document.createElement('label');
 
+        // Special handling for JIGS-specific translations (SelectPlayer)
+        if (name === 'SelectPlayer') {
+            label.textContent = t('selectPlayer');
+            label.setAttribute('data-jigs-custom', 'selectPlayer');
+        }
         // Check if this is a food/drink item (e.g., "food 1", "drink 2")
-        const foodDrinkMatch = name.match(/^(food|drink)\s+(\d+)$/i);
-        if (foodDrinkMatch) {
+        else if (name.match(/^(food|drink)\s+(\d+)$/i)) {
+            const foodDrinkMatch = name.match(/^(food|drink)\s+(\d+)$/i);
             const type = foodDrinkMatch[1].toLowerCase();
             const index = foodDrinkMatch[2];
             const i18nKey = type === 'food' ? nameToI18nMap['Food'] : nameToI18nMap['Drink'];
@@ -3392,18 +3400,16 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                 return;
             }
 
-            // Check if this is Multiplier label (uses JIGS translation)
-            if (label.getAttribute('data-jigs-multiplier') === 'true') {
-                label.textContent = t('multiplier');
+            // Check if this is a JIGS custom label (Multiplier, SelectPlayer, Dungeon Count)
+            const customKey = label.getAttribute('data-jigs-custom');
+            if (customKey) {
+                label.textContent = t(customKey);
                 label.title = label.textContent;
                 return;
             }
 
             // All other labels with data-i18n will be updated automatically by the game's updateContent()
         });
-
-        // Regenerate queue labels with new language
-        updateQueuePanelUI();
     }
 
     function setupLanguageChangeListener() {
@@ -3413,6 +3419,10 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                 currentLang = getCurrentLanguage();
                 updateUILanguage();
                 updateQueueEstimate();
+                // Delay queue update to allow game's i18next to update DOM first
+                setTimeout(() => {
+                    updateQueuePanelUI();
+                }, 100);
             });
             console.log('JIGS: Language change listener registered');
         }
