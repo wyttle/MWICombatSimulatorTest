@@ -119,6 +119,12 @@ function mergeSimResults(target, source) {
         }
     }
 
+    // 合并 lastDungeonFinishTime (累加，因为多worker按次数模拟时各自有独立时间轴)
+    target.lastDungeonFinishTime = (target.lastDungeonFinishTime || 0) + (source.lastDungeonFinishTime || 0);
+
+    // 合并 lastEncounterFinishTime (累加，因为多worker按次数模拟时各自有独立时间轴)
+    target.lastEncounterFinishTime = (target.lastEncounterFinishTime || 0) + (source.lastEncounterFinishTime || 0);
+
     // 合并 timeSpentAlive
     for (const otherEntry of (source.timeSpentAlive || [])) {
         const existingIndex = target.timeSpentAlive.findIndex(e => e.name === otherEntry.name);
