@@ -79,6 +79,9 @@
             dpsChange: 'DPS Change',
             percentDpsChange: '% DPS Change',
             goldPerDps: 'Gold per 0.01% DPS',
+            teamDpsChange: 'Team DPS Change',
+            percentTeamDpsChange: '% Team DPS Change',
+            goldPerTeamDps: 'Gold per 0.01% Team DPS',
             profitChange: 'Profit Change',
             percentProfitChange: '% Profit Change',
             goldPerProfit: 'Gold per 0.01% Profit',
@@ -233,6 +236,9 @@
             dpsChange: 'DPS 变化',
             percentDpsChange: 'DPS 变化率',
             goldPerDps: '每0.01% DPS金币',
+            teamDpsChange: '队伍DPS 变化',
+            percentTeamDpsChange: '队伍DPS 变化率',
+            goldPerTeamDps: '每0.01%队伍DPS金币',
             profitChange: '收益变化',
             percentProfitChange: '收益变化率',
             goldPerProfit: '每0.01%收益金币',
@@ -509,6 +515,7 @@ const resultsPanel = document.createElement('div');
                         ${t('showColumns')}
                         <label><input type="checkbox" class="column-toggle" data-col="ttp-col" checked> ${t('timeToPurchase')}</label>
                         <label><input type="checkbox" class="column-toggle" data-col="dps-col" checked> ${t('dpsCol')}</label>
+                        <label><input type="checkbox" class="column-toggle" data-col="team-dps-col" checked> Team ${t('dpsCol')}</label>
                         <label><input type="checkbox" class="column-toggle" data-col="profit-col" checked> ${t('profitCol')}</label>
                         <label><input type="checkbox" class="column-toggle" data-col="exp-col" checked> ${t('experienceCol')}</label>
                         <label><input type="checkbox" class="column-toggle" data-col="eph-col" checked> ${t('eph')}</label>
@@ -526,6 +533,9 @@ const resultsPanel = document.createElement('div');
                             <th class="dps-col" data-sort-key="dpsChange" title="${t('tooltipDpsChange')}">${t('dpsChange')}</th>
                             <th class="dps-col" data-sort-key="percentChange" title="${t('tooltipPercentChange')}">${t('percentDpsChange')}</th>
                             <th class="dps-col" data-sort-key="costPerDps" title="${t('tooltipCostPerDps')}">${t('goldPerDps')}</th>
+                            <th class="team-dps-col" data-sort-key="teamDpsChange" title="Team DPS Change">${t('teamDpsChange')}</th>
+                            <th class="team-dps-col" data-sort-key="percentTeamDpsChange" title="% Team DPS Change">${t('percentTeamDpsChange')}</th>
+                            <th class="team-dps-col" data-sort-key="costPerTeamDps" title="Gold per 0.01% Team DPS">${t('goldPerTeamDps')}</th>
                             <th class="profit-col" data-sort-key="profitChange" title="${t('tooltipProfitChange')}">${t('profitChange')}</th>
                             <th class="profit-col" data-sort-key="percentProfitChange" title="${t('tooltipPercentProfitChange')}">${t('percentProfitChange')}</th>
                             <th class="profit-col" data-sort-key="costPerProfit" title="${t('tooltipCostPerProfit')}">${t('goldPerProfit')}</th>
@@ -737,6 +747,9 @@ const queuePanel = document.createElement('div');
                     case 'dpsChange':         value = result.dps; break;
                     case 'percentChange':     value = result.percent; break;
                     case 'costPerDps':        value = result.costPerDps; break;
+                    case 'teamDpsChange':     value = result.teamDpsChange; break;
+                    case 'percentTeamDpsChange': value = result.percentTeamDpsChange; break;
+                    case 'costPerTeamDps':    value = result.costPerTeamDps; break;
                     case 'profitChange':      value = result.profitChange; break;
                     case 'percentProfitChange':value = result.percentProfitChange; break;
                     case 'costPerProfit':     value = result.costPerProfit; break;
@@ -1321,17 +1334,158 @@ function normalizeAndParseFloat(s) {
         return teamDpsElement.textContent.trim();
     }
     function formatGold(value) { if (value === 'N/A' || value === 'Free') return value; if (!isFinite(value) || value === Infinity) return "N/A"; if (value < 1000) return Math.round(value).toLocaleString(); if (value < 1000000) return `${(value / 1000).toFixed(1)}k`; return `${(value / 1000000).toFixed(2)}M`; }
+
+    function updateCostAndRecalculate(row, newCostText) {
+        // Parse the new cost value
+        let newCost;
+        if (newCostText === t('noSeller') || newCostText === 'No Seller') {
+            newCost = Infinity;
+        } else if (newCostText === t('free') || newCostText === 'Free' || newCostText === '0') {
+            newCost = 0;
+        } else {
+            newCost = parseGold(newCostText);
+            if (isNaN(newCost)) {
+                console.warn('JIGS: Invalid cost value entered:', newCostText);
+                return;
+            }
+        }
+
+        // Get all the cells in this row
+        const cells = row.querySelectorAll('td');
+        const costInput = row.querySelector('.jigs-editable-cost');
+
+        // Update the raw cost data
+        if (costInput) {
+            costInput.dataset.rawCost = newCost;
+        }
+        row.dataset.cost = isFinite(newCost) ? newCost : Infinity;
+
+        // Get the percent changes from dataset
+        const percentChange = parseFloat(row.dataset.percentChange);
+        const percentTeamDpsChange = parseFloat(row.dataset.percentTeamDpsChange);
+        const percentProfitChange = parseFloat(row.dataset.percentProfitChange);
+        const percentExpChange = parseFloat(row.dataset.percentExpChange);
+        const percentEphChange = parseFloat(row.dataset.percentEphChange);
+
+        // Recalculate cost-dependent values
+        let costPerDps, costPerTeamDps, costPerProfit, costPerExp, costPerEph;
+        let costPerDpsText, costPerTeamDpsText, costPerProfitText, costPerExpText, costPerEphText;
+        let timeToPurchase;
+
+        if (newCost === Infinity) {
+            costPerDps = 'N/A';
+            costPerTeamDps = 'N/A';
+            costPerProfit = 'N/A';
+            costPerExp = 'N/A';
+            costPerEph = 'N/A';
+            costPerDpsText = 'N/A';
+            costPerTeamDpsText = 'N/A';
+            costPerProfitText = 'N/A';
+            costPerExpText = 'N/A';
+            costPerEphText = 'N/A';
+            timeToPurchase = Infinity;
+        } else if (newCost === 0) {
+            costPerDps = 'Free';
+            costPerTeamDps = 'Free';
+            costPerProfit = 'Free';
+            costPerExp = 'Free';
+            costPerEph = 'Free';
+            costPerDpsText = 'Free';
+            costPerTeamDpsText = 'Free';
+            costPerProfitText = 'Free';
+            costPerExpText = 'Free';
+            costPerEphText = 'Free';
+            timeToPurchase = 0;
+        } else {
+            // Calculate cost per percent metrics
+            costPerDps = (percentChange > 0) ? (newCost / percentChange) * 0.01 : 'N/A';
+            costPerTeamDps = (percentTeamDpsChange > 0) ? (newCost / percentTeamDpsChange) * 0.01 : 'N/A';
+            costPerProfit = (percentProfitChange > 0) ? (newCost / percentProfitChange) * 0.01 : 'N/A';
+            costPerExp = (percentExpChange > 0) ? (newCost / percentExpChange) * 0.01 : 'N/A';
+            costPerEph = (percentEphChange > 0) ? (newCost / percentEphChange) * 0.01 : 'N/A';
+
+            costPerDpsText = formatGold(costPerDps);
+            costPerTeamDpsText = formatGold(costPerTeamDps);
+            costPerProfitText = formatGold(costPerProfit);
+            costPerExpText = formatGold(costPerExp);
+            costPerEphText = formatGold(costPerEph);
+
+            // Calculate time to purchase
+            timeToPurchase = baselineProfit > 0 ? newCost / baselineProfit : Infinity;
+        }
+
+        // Update dataset attributes
+        row.dataset.timeToPurchase = isFinite(timeToPurchase) ? timeToPurchase : Infinity;
+        row.dataset.costPerDps = costPerDps === 'Free' ? 0 : (isFinite(costPerDps) ? costPerDps : Infinity);
+        row.dataset.costPerTeamDps = costPerTeamDps === 'Free' ? 0 : (isFinite(costPerTeamDps) ? costPerTeamDps : Infinity);
+        row.dataset.costPerProfit = costPerProfit === 'Free' ? 0 : (isFinite(costPerProfit) ? costPerProfit : Infinity);
+        row.dataset.costPerExp = costPerExp === 'Free' ? 0 : (isFinite(costPerExp) ? costPerExp : Infinity);
+        row.dataset.costPerEph = costPerEph === 'Free' ? 0 : (isFinite(costPerEph) ? costPerEph : Infinity);
+
+        // Find column indices dynamically
+        const thead = document.querySelector('#batch-results-table thead tr');
+        const headers = Array.from(thead.querySelectorAll('th'));
+
+        const updateCellByKey = (sortKey, value) => {
+            const headerIndex = headers.findIndex(h => h.dataset.sortKey === sortKey);
+            if (headerIndex === -1) return;
+
+            // Count visible columns before this one
+            let visibleIndex = 0;
+            for (let i = 0; i < headerIndex; i++) {
+                if (headers[i].style.display !== 'none') {
+                    visibleIndex++;
+                }
+            }
+
+            if (cells[visibleIndex]) {
+                cells[visibleIndex].textContent = value;
+            }
+        };
+
+        // Update the cells
+        updateCellByKey('timeToPurchase', formatTime(timeToPurchase));
+        updateCellByKey('costPerDps', costPerDpsText);
+        updateCellByKey('costPerTeamDps', costPerTeamDpsText);
+        updateCellByKey('costPerProfit', costPerProfitText);
+        updateCellByKey('costPerExp', costPerExpText);
+        updateCellByKey('costPerEph', costPerEphText);
+
+        // Update the cost input display
+        if (costInput) {
+            costInput.value = formatGold(newCost);
+        }
+
+        // Update the detailedResults array
+        const upgradeName = row.dataset.upgrade;
+        const resultIndex = detailedResults.findIndex(r => r.upgrade === upgradeName);
+        if (resultIndex !== -1) {
+            detailedResults[resultIndex].cost = newCost;
+            detailedResults[resultIndex].timeToPurchase = timeToPurchase;
+            detailedResults[resultIndex].costPerDps = costPerDps;
+            detailedResults[resultIndex].costPerTeamDps = costPerTeamDps;
+            detailedResults[resultIndex].costPerProfit = costPerProfit;
+            detailedResults[resultIndex].costPerExp = costPerExp;
+            detailedResults[resultIndex].costPerEph = costPerEph;
+        }
+
+        // Reapply highlighting
+        highlightResults();
+    }
+
     function addResultRow(result) {
         const resultsTbody = document.querySelector('#batch-results-table tbody');
         const row = resultsTbody.insertRow();
         let costText = formatGold(result.cost);
         let costPerDpsText = formatGold(result.costPerDps);
+        let costPerTeamDpsText = formatGold(result.costPerTeamDps);
         let costPerProfitText = formatGold(result.costPerProfit);
         let costPerExpText = formatGold(result.costPerExp);
         let costPerEphText = formatGold(result.costPerEph);
         if (result.cost === Infinity) {
             costText = t('noSeller');
             costPerDpsText = 'N/A';
+            costPerTeamDpsText = 'N/A';
             costPerProfitText = 'N/A';
             costPerExpText = 'N/A';
             costPerEphText = 'N/A';
@@ -1348,6 +1502,9 @@ function normalizeAndParseFloat(s) {
         row.dataset.dpsChange = result.dps;
         row.dataset.percentChange = isFinite(result.percent) ? result.percent : Infinity;
         row.dataset.costPerDps = result.costPerDps === 'Free' ? 0 : (isFinite(result.costPerDps) ? result.costPerDps : Infinity);
+        row.dataset.teamDpsChange = result.teamDpsChange;
+        row.dataset.percentTeamDpsChange = isFinite(result.percentTeamDpsChange) ? result.percentTeamDpsChange : Infinity;
+        row.dataset.costPerTeamDps = result.costPerTeamDps === 'Free' ? 0 : (isFinite(result.costPerTeamDps) ? result.costPerTeamDps : Infinity);
         row.dataset.profitChange = result.profitChange;
         row.dataset.percentProfitChange = isFinite(result.percentProfitChange) ? result.percentProfitChange : Infinity;
         row.dataset.costPerProfit = result.costPerProfit === 'Free' ? 0 : (isFinite(result.costPerProfit) ? result.costPerProfit : Infinity);
@@ -1361,11 +1518,14 @@ function normalizeAndParseFloat(s) {
         row.dataset.percentDphChange = isFinite(result.percentDphChange) ? result.percentDphChange : Infinity;
 
         row.innerHTML = ` <td class="upgrade-col">${upgradeText}</td>
-                                <td class="cost-col">${costText}</td>
+                                <td class="cost-col"><input type="text" class="jigs-editable-cost" value="${costText}" data-raw-cost="${result.cost}" style="width: 100%; background: transparent; border: 1px solid #555; color: inherit; padding: 2px;"></td>
                                 <td class="ttp-col">${formatTime(result.timeToPurchase)}</td>
                                 <td class="dps-col">${result.dps > 0 ? '+' : ''}${result.dps.toFixed(2)}</td>
                                 <td class="dps-col">${isFinite(result.percent) ? result.percent.toFixed(2)+'%' : '∞'}</td>
                                 <td class="dps-col">${costPerDpsText}</td>
+                                <td class="team-dps-col">${result.teamDpsChange > 0 ? '+' : ''}${result.teamDpsChange.toFixed(2)}</td>
+                                <td class="team-dps-col">${isFinite(result.percentTeamDpsChange) ? result.percentTeamDpsChange.toFixed(2)+'%' : '∞'}</td>
+                                <td class="team-dps-col">${costPerTeamDpsText}</td>
                                 <td class="profit-col">${result.profitChange > 0 ? '+' : ''}${formatGold(result.profitChange)}</td>
                                 <td class="profit-col">${isFinite(result.percentProfitChange) ? result.percentProfitChange.toFixed(2)+'%' : '∞'}</td>
                                 <td class="profit-col">${costPerProfitText}</td>
@@ -1377,6 +1537,17 @@ function normalizeAndParseFloat(s) {
                                 <td class="eph-col">${costPerEphText}</td>
                                 <td class="dph-col">${result.dphChange > 0 ? '+' : ''}${result.dphChange.toFixed(2)}</td>
                                 <td class="dph-col">${isFinite(result.percentDphChange) ? result.percentDphChange.toFixed(2)+'%' : '∞'}</td>`;
+
+        // Add event listener for cost editing
+        const costInput = row.querySelector('.jigs-editable-cost');
+        if (costInput) {
+            costInput.addEventListener('change', function() {
+                updateCostAndRecalculate(row, this.value);
+            });
+            costInput.addEventListener('blur', function() {
+                updateCostAndRecalculate(row, this.value);
+            });
+        }
     }
     function getProfitValue() {
         const durationInput = document.getElementById('inputSimulationTime');
@@ -1610,13 +1781,28 @@ function normalizeAndParseFloat(s) {
         document.querySelectorAll('#batch-results-table td').forEach(td => {
             td.classList.remove('best-upgrade', 'worst-upgrade');
         });
+
+        // Get column indices dynamically based on visible columns
+        const thead = document.querySelector('#batch-results-table thead tr');
+        const headers = Array.from(thead.querySelectorAll('th'));
+
         const metrics = [
-            { key: 'costPerDps', colIndex: 5 },
-            { key: 'costPerProfit', colIndex: 8 },
-            { key: 'costPerExp', colIndex: 11 },
-            { key: 'costPerEph', colIndex: 14 }
+            { key: 'costPerDps', sortKey: 'costPerDps' },
+            { key: 'costPerTeamDps', sortKey: 'costPerTeamDps' },
+            { key: 'costPerProfit', sortKey: 'costPerProfit' },
+            { key: 'costPerExp', sortKey: 'costPerExp' },
+            { key: 'costPerEph', sortKey: 'costPerEph' }
         ];
+
         for (const metric of metrics) {
+            // Find the column index for this metric dynamically
+            const headerIndex = headers.findIndex(h => h.dataset.sortKey === metric.sortKey);
+            if (headerIndex === -1) continue; // Column not found or hidden
+
+            // Check if this column is visible
+            const header = headers[headerIndex];
+            if (header.style.display === 'none') continue;
+
             let values = [];
             for (const row of rows) {
                 const cost = parseFloat(row.dataset.cost);
@@ -1625,7 +1811,7 @@ function normalizeAndParseFloat(s) {
                 if (cost === 0 || !isFinite(metricValue)) {
                     continue;
                 }
-                values.push({ value: metricValue, row: row });
+                values.push({ value: metricValue, row: row, headerIndex: headerIndex });
             }
             if (values.length < 2) { continue; }
             values.sort((a, b) => a.value - b.value);
@@ -1634,8 +1820,17 @@ function normalizeAndParseFloat(s) {
             if (minVal === maxVal) { continue; }
             const minRow = values[0].row;
             const maxRow = values[values.length - 1].row;
-            const minCell = minRow.children[metric.colIndex];
-            const maxCell = maxRow.children[metric.colIndex];
+
+            // Find the actual visible cell index
+            let visibleIndex = 0;
+            for (let i = 0; i < headerIndex; i++) {
+                if (headers[i].style.display !== 'none') {
+                    visibleIndex++;
+                }
+            }
+
+            const minCell = minRow.children[visibleIndex];
+            const maxCell = maxRow.children[visibleIndex];
             if (minCell) minCell.classList.add('best-upgrade');
             if (maxCell) maxCell.classList.add('worst-upgrade');
         }
@@ -2854,6 +3049,7 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                 const keyMap = {
                     'ttp-col': 'timeToPurchase',
                     'dps-col': 'dpsCol',
+                    'team-dps-col': 'dpsCol',
                     'profit-col': 'profitCol',
                     'exp-col': 'experienceCol',
                     'eph-col': 'eph',
@@ -2862,7 +3058,8 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                 if (keyMap[col]) {
                     label.innerHTML = '';
                     label.appendChild(checkbox);
-                    label.appendChild(document.createTextNode(' ' + t(keyMap[col])));
+                    const prefix = col === 'team-dps-col' ? 'Team ' : '';
+                    label.appendChild(document.createTextNode(' ' + prefix + t(keyMap[col])));
                 }
             }
         });
