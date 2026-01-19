@@ -1258,10 +1258,11 @@ function normalizeAndParseFloat(s) {
         itemSelect.dataset.originalValue = itemValue;
         itemSelect.dataset.name = name;
         itemOptions.forEach(opt => {
-            if (opt !== 'Promote') {
+            if ((typeof opt === 'object' ? opt.value : opt) !== 'Promote') {
                 const option = document.createElement('option');
-                option.value = opt;
-                option.textContent = opt;
+                // Store English name as value, display text as textContent
+                option.value = typeof opt === 'object' ? opt.value : opt;
+                option.textContent = typeof opt === 'object' ? opt.text : opt;
                 itemSelect.appendChild(option);
             }
         });
@@ -1430,16 +1431,9 @@ function normalizeAndParseFloat(s) {
             const headerIndex = headers.findIndex(h => h.dataset.sortKey === sortKey);
             if (headerIndex === -1) return;
 
-            // Count visible columns before this one
-            let visibleIndex = 0;
-            for (let i = 0; i < headerIndex; i++) {
-                if (headers[i].style.display !== 'none') {
-                    visibleIndex++;
-                }
-            }
-
-            if (cells[visibleIndex]) {
-                cells[visibleIndex].textContent = value;
+            // Use headerIndex directly since cells and headers are 1:1 correspondence
+            if (cells[headerIndex]) {
+                cells[headerIndex].textContent = value;
             }
         };
 
@@ -2015,7 +2009,39 @@ function normalizeAndParseFloat(s) {
                 itemsFound++;
             }
         });
-        for (let i = 0; i < 5; i++) { const abilitySelect = document.getElementById(`selectAbility_${i}`); const levelInput = document.getElementById(`inputAbilityLevel_${i}`); if (abilitySelect && levelInput) { const name = `Ability ${i + 1}`; const itemValue = abilitySelect.options[abilitySelect.selectedIndex].text; const itemOptions = Array.from(abilitySelect.options).map(opt => opt.text); const lvlValue = levelInput.value; groupContainers.abilities.appendChild(createAbilityRow(name, itemValue, itemOptions, lvlValue)); groupContainers.abilities.appendChild(createTriggerRow('ability', i)); jigsNameToPageElementMap.set(name, abilitySelect); jigsNameToPageElementMap.set(`${name} Level`, levelInput); itemsFound++; } }
+        for (let i = 0; i < 5; i++) {
+            const abilitySelect = document.getElementById(`selectAbility_${i}`);
+            const levelInput = document.getElementById(`inputAbilityLevel_${i}`);
+            if (abilitySelect && levelInput) {
+                const name = `Ability ${i + 1}`;
+                const selectedOption = abilitySelect.options[abilitySelect.selectedIndex];
+                const getEnglishAbilityName = (option) => {
+                    const i18nKey = option.getAttribute('data-i18n');
+                    if (i18nKey && typeof i18next !== 'undefined') {
+                        try {
+                            const englishName = i18next.t(i18nKey, { lng: 'en' });
+                            if (englishName && englishName !== i18nKey) {
+                                return englishName;
+                            }
+                        } catch (e) {
+                            console.warn('JIGS: Failed to get English translation for ability', i18nKey, e);
+                        }
+                    }
+                    return option.textContent.trim();
+                };
+                const itemValue = getEnglishAbilityName(selectedOption);
+                const itemOptions = Array.from(abilitySelect.options).map(opt => ({
+                    value: getEnglishAbilityName(opt),
+                    text: opt.textContent.trim()
+                }));
+                const lvlValue = levelInput.value;
+                groupContainers.abilities.appendChild(createAbilityRow(name, itemValue, itemOptions, lvlValue));
+                groupContainers.abilities.appendChild(createTriggerRow('ability', i));
+                jigsNameToPageElementMap.set(name, abilitySelect);
+                jigsNameToPageElementMap.set(`${name} Level`, levelInput);
+                itemsFound++;
+            }
+        }
         document.querySelectorAll('select[id^="selectFood_"], select[id^="selectDrink_"]').forEach(el => {
             const isFood = el.id.includes('Food');
             const type = isFood ? 'food' : 'drink';
@@ -2763,7 +2789,33 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                             } else if (upgrade.name.startsWith('Ability')) {
                                 const baseName = upgrade.name;
                                 const abilityName = upgrade.value || document.querySelector(`#batch-inputs-container [data-name="${baseName}"]`)?.dataset.originalValue;
-                                const marketItemName = abilityName;
+
+                                // Get English name via i18n from the page element
+                                let marketItemName = abilityName;
+                                const pageSelect = jigsNameToPageElementMap.get(baseName);
+                                if (pageSelect && pageSelect.tagName === 'SELECT') {
+                                    // Find the option matching the current ability name
+                                    const matchingOption = Array.from(pageSelect.options).find(opt => {
+                                        const optText = opt.textContent.trim();
+                                        const optValue = opt.value;
+                                        return optText === abilityName || optValue === abilityName;
+                                    });
+
+                                    if (matchingOption) {
+                                        const i18nKey = matchingOption.getAttribute('data-i18n');
+                                        if (i18nKey && typeof i18next !== 'undefined') {
+                                            try {
+                                                const englishName = i18next.t(i18nKey, { lng: 'en' });
+                                                if (englishName && englishName !== i18nKey) {
+                                                    marketItemName = englishName;
+                                                }
+                                            } catch (e) {
+                                                console.warn('JIGS: Failed to get English translation for ability in cost calculation', i18nKey, e);
+                                            }
+                                        }
+                                    }
+                                }
+
                                 const correctlyCasedKey = Object.keys(SPELL_BOOK_XP).find(k => k.toLowerCase() === marketItemName.toLowerCase());
                                 const xpPerBook = correctlyCasedKey ? SPELL_BOOK_XP[correctlyCasedKey] : undefined;
                                 if (abilityName === 'Empty' || xpPerBook === undefined) { cost = 0; } else {
