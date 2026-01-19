@@ -83,6 +83,7 @@
     "simAllSolos": "Sim All Solos",
     "selectSolo": "Select Solo Target",
     "simDungeon": "Sim Dungeon",
+    "loadJigs": "Load JIGS",
     "dungeonCount": "Dungeon Count",
     "parallelCount": "Parallel Workers",
     "simulationSettings": "Simulation Settings",

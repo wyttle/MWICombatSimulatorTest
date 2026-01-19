@@ -82,6 +82,7 @@
     "simAllSolos": "模拟所有单刷",
     "selectSolo": "选择单人目标",
     "simDungeon": "模拟地下城",
+    "loadJigs": "加载 JIGS",
     "dungeonCount": "模拟次数",
     "parallelCount": "并行线程数",
     "simulationSettings": "模拟配置",

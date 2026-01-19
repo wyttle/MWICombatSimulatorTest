@@ -561,6 +561,16 @@
                                 </button>
                             </div>
                         </div>
+                        <div class="row pt-3">
+                            <div class="col-md-auto">
+                                <button type="button" class="btn btn-primary" id="loadJigsButton">
+                                    <span data-i18n="common:loadJigs">Load JIGS</span>
+                                </button>
+                            </div>
+                            <div class="col-md-auto">
+                                <small id="jigsStatus" class="text-muted align-self-center" style="display: none;"></small>
+                            </div>
+                        </div>
                         <!-- #endregion -->
                     </div>
                     <div class="col-md-7">
@@ -1908,6 +1918,204 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.2.0/js/bootstrap.bundle.min.js" integrity="sha512-9GacT4119eY3AcosfWtHMsT5JyZudrexyEVzTBWV3viP/YfB9e2pEy3N7WXL3SV6ASXpTU0vzzSxsbfsuUH4sQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js" integrity="sha512-Y51n9mtKTVBh3Jbx5pZSJNDDMyY+yGe77DGtBPzRlgsf/YLCh13kSZ3JmfHGzYFCmOndraf0sQgfM654b7dJ3w==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="bundle.js" type="module"></script>
+    <script>
+        // JIGS Dynamic Loader with Tampermonkey API Compatibility Layer
+        (function() {
+            'use strict';
+
+            const JIGS_SCRIPT_PATH = './jigs.js';
+
+            // Create Tampermonkey API compatibility layer
+            function createTampermonkeyShim() {
+                // GM_addStyle - Add CSS styles
+                window.GM_addStyle = function(css) {
+                    const style = document.createElement('style');
+                    style.textContent = css;
+                    document.head.appendChild(style);
+                };
+
+                // GM_setValue - Store values in localStorage
+                window.GM_setValue = function(key, value) {
+                    try {
+                        localStorage.setItem('GM_' + key, JSON.stringify(value));
+                    } catch (e) {
+                        console.error('GM_setValue error:', e);
+                    }
+                };
+
+                // GM_getValue - Retrieve values from localStorage
+                window.GM_getValue = function(key, defaultValue) {
+                    try {
+                        const value = localStorage.getItem('GM_' + key);
+                        return value !== null ? JSON.parse(value) : defaultValue;
+                    } catch (e) {
+                        console.error('GM_getValue error:', e);
+                        return defaultValue;
+                    }
+                };
+
+                // GM_deleteValue - Delete values from localStorage
+                window.GM_deleteValue = function(key) {
+                    try {
+                        localStorage.removeItem('GM_' + key);
+                    } catch (e) {
+                        console.error('GM_deleteValue error:', e);
+                    }
+                };
+
+                // GM_xmlhttpRequest - Make cross-origin requests using fetch
+                window.GM_xmlhttpRequest = function(details) {
+                    const method = details.method || 'GET';
+                    let url = details.url;
+                    const headers = details.headers || {};
+                    const data = details.data;
+
+                    // Try direct fetch first
+                    const fetchOptions = {
+                        method: method,
+                        headers: headers,
+                        mode: 'cors',
+                        credentials: 'omit'
+                    };
+
+                    if (data && (method === 'POST' || method === 'PUT')) {
+                        fetchOptions.body = data;
+                    }
+
+                    console.log('GM_xmlhttpRequest: Fetching', url);
+
+                    // First attempt: direct fetch
+                    fetch(url, fetchOptions)
+                        .then(response => {
+                            return response.text().then(responseText => {
+                                const responseObj = {
+                                    status: response.status,
+                                    statusText: response.statusText,
+                                    responseText: responseText,
+                                    response: responseText,
+                                    readyState: 4,
+                                    responseHeaders: {}
+                                };
+
+                                // Parse headers
+                                response.headers.forEach((value, key) => {
+                                    responseObj.responseHeaders[key] = value;
+                                });
+
+                                console.log('GM_xmlhttpRequest: Success', url, response.status);
+
+                                if (response.ok && details.onload) {
+                                    details.onload(responseObj);
+                                } else if (!response.ok && details.onerror) {
+                                    details.onerror(responseObj);
+                                }
+                            });
+                        })
+                        .catch(error => {
+                            console.warn('GM_xmlhttpRequest: Direct fetch failed, trying CORS proxy...', error);
+
+                            // Second attempt: use CORS proxy
+                            const proxyUrl = 'https://api.allorigins.win/raw?url=' + encodeURIComponent(url);
+
+                            fetch(proxyUrl, {
+                                method: method,
+                                mode: 'cors'
+                            })
+                                .then(response => response.text())
+                                .then(responseText => {
+                                    console.log('GM_xmlhttpRequest: CORS proxy success', url);
+                                    if (details.onload) {
+                                        details.onload({
+                                            status: 200,
+                                            statusText: 'OK',
+                                            responseText: responseText,
+                                            response: responseText,
+                                            readyState: 4,
+                                            responseHeaders: {}
+                                        });
+                                    }
+                                })
+                                .catch(proxyError => {
+                                    console.error('GM_xmlhttpRequest: Both direct and proxy fetch failed', url, proxyError);
+                                    if (details.onerror) {
+                                        details.onerror({
+                                            status: 0,
+                                            statusText: 'CORS Error: ' + proxyError.message,
+                                            error: proxyError
+                                        });
+                                    }
+                                });
+                        });
+                };
+
+                console.log('Tampermonkey API shim loaded');
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+                const loadButton = document.getElementById('loadJigsButton');
+                const statusElement = document.getElementById('jigsStatus');
+
+                if (!loadButton) return;
+
+                // Check if JIGS is already loaded in current session
+                function checkJigsLoaded() {
+                    return document.getElementById('batch-panel') !== null;
+                }
+
+                // Update UI if JIGS is already loaded
+                if (checkJigsLoaded()) {
+                    loadButton.textContent = 'JIGS Loaded ✓';
+                    loadButton.disabled = true;
+                    loadButton.classList.remove('btn-primary');
+                    loadButton.classList.add('btn-success');
+                }
+
+                loadButton.addEventListener('click', function() {
+                    // Immediately disable button to prevent double-click
+                    loadButton.disabled = true;
+                    loadButton.textContent = 'Loading JIGS...';
+                    statusElement.style.display = 'block';
+                    statusElement.textContent = 'Loading script...';
+                    statusElement.className = 'text-muted d-block mt-1';
+
+                    // Create Tampermonkey API shim before loading JIGS
+                    createTampermonkeyShim();
+
+                    // Create and load the script
+                    const script = document.createElement('script');
+                    script.src = JIGS_SCRIPT_PATH;
+                    script.type = 'text/javascript';
+
+                    script.onload = function() {
+                        console.log('JIGS script loaded successfully');
+                        loadButton.textContent = 'JIGS Loaded ✓';
+                        loadButton.classList.remove('btn-primary');
+                        loadButton.classList.add('btn-success');
+                        statusElement.textContent = 'JIGS loaded successfully!';
+                        statusElement.className = 'text-success d-block mt-1';
+
+                        // Hide status after 3 seconds
+                        setTimeout(function() {
+                            statusElement.style.display = 'none';
+                        }, 3000);
+                    };
+
+                    script.onerror = function() {
+                        console.error('Failed to load JIGS script');
+                        loadButton.textContent = 'Load JIGS (Failed)';
+                        loadButton.classList.remove('btn-primary');
+                        loadButton.classList.add('btn-danger');
+                        statusElement.textContent = 'Failed to load JIGS. Check console for errors.';
+                        statusElement.className = 'text-danger d-block mt-1';
+                        // Keep button disabled even on error to prevent repeated failures
+                    };
+
+                    // Append script to head
+                    document.head.appendChild(script);
+                });
+            });
+        })();
+    </script>
 </body>
 <footer>
     <div style="text-align: center;">
