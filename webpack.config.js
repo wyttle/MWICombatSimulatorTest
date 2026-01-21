@@ -1,7 +1,9 @@
 const path = require('path');
 const CopyWebpackPlugin = require('copy-webpack-plugin');
+const TerserPlugin = require('terser-webpack-plugin');
 
 const publicPath = process.env.PUBLIC_PATH || '/';
+const isProduction = process.env.NODE_ENV === 'production';
 
 module.exports = {
   entry: './src/main.js',
@@ -11,8 +13,26 @@ module.exports = {
     publicPath: publicPath,
     clean: true,
   },
-  mode: 'development',
-  devtool: 'source-map',
+  mode: isProduction ? 'production' : 'development',
+  devtool: isProduction ? false : 'source-map',
+  optimization: {
+    minimize: isProduction,
+    minimizer: [
+      new TerserPlugin({
+        terserOptions: {
+          compress: {
+            drop_console: false,
+            drop_debugger: true,
+            pure_funcs: ['console.log'],
+          },
+          format: {
+            comments: false,
+          },
+        },
+        extractComments: false,
+      }),
+    ],
+  },
   devServer: {
     static: {
       directory: path.join(__dirname, 'dist'),

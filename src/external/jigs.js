@@ -734,6 +734,32 @@ const queuePanel = document.createElement('div');
     const statusDiv = document.getElementById('batch-status');
     const groupContainers = { skills: document.querySelector('#skills-group'), house: document.querySelector('#house-grid-container'), abilities: document.querySelector('#abilities-group'), equipment: document.querySelector('#equipment-group'), food: document.querySelector('#food-drink-group'), sim: document.querySelector('#sim-settings-group'), };
 
+    // 提取的重复代码 - 查找选项（完全等价于原始逻辑）
+    function findOptionByI18nOrText(selectElement, targetValue) {
+        return Array.from(selectElement.options).find(o => {
+            const i18nKey = o.getAttribute('data-i18n');
+            if (i18nKey && typeof i18next !== 'undefined') {
+                try {
+                    const englishName = i18next.t(i18nKey, { lng: 'en' });
+                    if (englishName === targetValue) return true;
+                } catch (e) {}
+            }
+            return o.text === targetValue;
+        });
+    }
+
+    // 提取的重复代码 - 百分比计算（完全等价于原始逻辑）
+    function calcPercentChange(change, baseline) {
+        return (baseline > 0) ? (change / baseline) * 100 : (change > 0 ? Infinity : 0);
+    }
+
+    // 提取的重复代码 - 成本计算（完全等价于原始逻辑）
+    function calcCostPerPercent(totalCost, percentChange, gain) {
+        return (percentChange > 0 && isFinite(totalCost) && totalCost !== 0)
+            ? (totalCost / percentChange) * 0.01
+            : (totalCost === 0 && gain > 0 ? "Free" : "N/A");
+    }
+
     function exportResultsToCSV() {
         if (detailedResults.length === 0) {
             alert(t('errorNoResults'));
@@ -2378,16 +2404,7 @@ function normalizeAndParseFloat(s) {
                     if (pageEl) {
                         console.log(`JIGS DEBUG: Changing '${uiEl.dataset.name}' on page to '${uiEl.value}'`);
                         if (pageEl.tagName === 'SELECT') {
-                            const opt = Array.from(pageEl.options).find(o => {
-                                const i18nKey = o.getAttribute('data-i18n');
-                                if (i18nKey && typeof i18next !== 'undefined') {
-                                    try {
-                                        const englishName = i18next.t(i18nKey, { lng: 'en' });
-                                        if (englishName === uiEl.value) return true;
-                                    } catch (e) {}
-                                }
-                                return o.text === uiEl.value;
-                            });
+                            const opt = findOptionByI18nOrText(pageEl, uiEl.value);
                             if (opt) pageEl.value = opt.value;
                         } else {
                             pageEl.value = uiEl.value;
@@ -2775,16 +2792,7 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
         const originalValue = jigsEl.dataset.originalValue;
 
         if (pageEl.tagName === 'SELECT') {
-            const opt = Array.from(pageEl.options).find(o => {
-                const i18nKey = o.getAttribute('data-i18n');
-                if (i18nKey && typeof i18next !== 'undefined') {
-                    try {
-                        const englishName = i18next.t(i18nKey, { lng: 'en' });
-                        if (englishName === originalValue) return true;
-                    } catch (e) {}
-                }
-                return o.text === originalValue;
-            });
+            const opt = findOptionByI18nOrText(pageEl, originalValue);
             if (opt) pageEl.value = opt.value;
         } else {
             // For all other inputs (including house number inputs)
@@ -2843,16 +2851,7 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                                 const el = jigsNameToPageElementMap.get(name);
                                 if (!el) { console.warn(`JIGS: Could not find page element for "${name}" to apply change.`); return; }
                                 if (el.tagName === 'SELECT') {
-                                    const opt = Array.from(el.options).find(o => {
-                                        const i18nKey = o.getAttribute('data-i18n');
-                                        if (i18nKey && typeof i18next !== 'undefined') {
-                                            try {
-                                                const englishName = i18next.t(i18nKey, { lng: 'en' });
-                                                if (englishName === newValue) return true;
-                                            } catch (e) {}
-                                        }
-                                        return o.text === newValue;
-                                    });
+                                    const opt = findOptionByI18nOrText(el, newValue);
                                     if (opt) el.value = opt.value;
                                 } else {
                                     el.value = newValue;
@@ -3026,17 +3025,23 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                         totalBooks += booksNeeded;
                     }
 
-                    const dpsGain = newDps - baselineDps; const percentChange = (baselineDps > 0) ? (dpsGain / baselineDps) * 100 : (dpsGain > 0 ? Infinity : 0);
-                    const teamDpsGain = newTeamDps - baselineTeamDps; const percentTeamDpsChange = (baselineTeamDps > 0) ? (teamDpsGain / baselineTeamDps) * 100 : (teamDpsGain > 0 ? Infinity : 0);
-                    const profitChange = newProfit - baselineProfit; const percentProfitChange = (baselineProfit > 0) ? (profitChange / baselineProfit) * 100 : (profitChange > 0 ? Infinity : 0);
-                    const expChange = newExp - baselineExp; const percentExpChange = (baselineExp > 0) ? (expChange / baselineExp) * 100 : (expChange > 0 ? Infinity : 0);
-                    const ephChange = newEph - baselineEph; const percentEphChange = (baselineEph > 0) ? (ephChange / baselineEph) * 100 : (ephChange > 0 ? Infinity : 0);
-                    const dphChange = newDph - baselineDph; const percentDphChange = (baselineDph > 0) ? (dphChange / baselineDph) * 100 : (dphChange !== 0 ? Infinity : 0);
-                    const costPerPercent = (percentChange > 0 && isFinite(totalCost) && totalCost !== 0) ? (totalCost / percentChange) * 0.01 : (totalCost === 0 && dpsGain > 0 ? "Free" : "N/A");
-                    const costPerTeamDpsPercent = (percentTeamDpsChange > 0 && isFinite(totalCost) && totalCost !== 0) ? (totalCost / percentTeamDpsChange) * 0.01 : (totalCost === 0 && teamDpsGain > 0 ? "Free" : "N/A");
-                    const costPerProfitPercent = (percentProfitChange > 0 && isFinite(totalCost) && totalCost !== 0) ? (totalCost / percentProfitChange) * 0.01 : (totalCost === 0 && profitChange > 0 ? "Free" : "N/A");
-                    const costPerExpPercent = (percentExpChange > 0 && isFinite(totalCost) && totalCost !== 0) ? (totalCost / percentExpChange) * 0.01 : (totalCost === 0 && expChange > 0 ? "Free" : "N/A");
-                    const costPerEphPercent = (percentEphChange > 0 && isFinite(totalCost) && totalCost !== 0) ? (totalCost / percentEphChange) * 0.01 : (totalCost === 0 && ephChange > 0 ? "Free" : "N/A");
+                    const dpsGain = newDps - baselineDps;
+                    const percentChange = calcPercentChange(dpsGain, baselineDps);
+                    const teamDpsGain = newTeamDps - baselineTeamDps;
+                    const percentTeamDpsChange = calcPercentChange(teamDpsGain, baselineTeamDps);
+                    const profitChange = newProfit - baselineProfit;
+                    const percentProfitChange = calcPercentChange(profitChange, baselineProfit);
+                    const expChange = newExp - baselineExp;
+                    const percentExpChange = calcPercentChange(expChange, baselineExp);
+                    const ephChange = newEph - baselineEph;
+                    const percentEphChange = calcPercentChange(ephChange, baselineEph);
+                    const dphChange = newDph - baselineDph;
+                    const percentDphChange = (baselineDph > 0) ? (dphChange / baselineDph) * 100 : (dphChange !== 0 ? Infinity : 0);
+                    const costPerPercent = calcCostPerPercent(totalCost, percentChange, dpsGain);
+                    const costPerTeamDpsPercent = calcCostPerPercent(totalCost, percentTeamDpsChange, teamDpsGain);
+                    const costPerProfitPercent = calcCostPerPercent(totalCost, percentProfitChange, profitChange);
+                    const costPerExpPercent = calcCostPerPercent(totalCost, percentExpChange, expChange);
+                    const costPerEphPercent = calcCostPerPercent(totalCost, percentEphChange, ephChange);
                     const timeToPurchaseDays = (baselineProfit > 0 && isFinite(totalCost)) ? (totalCost / baselineProfit) : Infinity;
                     const resultData = { upgrade: simulation.label, cost: totalCost, timeToPurchase: timeToPurchaseDays, dps: dpsGain, percent: percentChange, costPerDps: costPerPercent, teamDpsChange: teamDpsGain, percentTeamDpsChange: percentTeamDpsChange, costPerTeamDps: costPerTeamDpsPercent, books: totalBooks, averageDps: newDps, averageTeamDps: newTeamDps, individualRuns: simResult.individualRuns, profitChange: profitChange, percentProfitChange: percentProfitChange, costPerProfit: costPerProfitPercent, expChange: expChange, percentExpChange: percentExpChange, costPerExp: costPerExpPercent, ephChange: ephChange, percentEphChange: percentEphChange, costPerEph: costPerEphPercent, dphChange: dphChange, percentDphChange: percentDphChange, timeToLevelText: timeToLevelText };
                     addResultRow(resultData);
@@ -3058,16 +3063,7 @@ jigsNameToPageElementMap.forEach((pageEl, name) => {
                 const pageEl = jigsNameToPageElementMap.get(name);
                 if (pageEl) {
                     if (pageEl.tagName === 'SELECT') {
-                        const opt = Array.from(pageEl.options).find(o => {
-                            const i18nKey = o.getAttribute('data-i18n');
-                            if (i18nKey && typeof i18next !== 'undefined') {
-                                try {
-                                    const englishName = i18next.t(i18nKey, { lng: 'en' });
-                                    if (englishName === originalValue) return true;
-                                } catch (e) {}
-                            }
-                            return o.text === originalValue;
-                        });
+                        const opt = findOptionByI18nOrText(pageEl, originalValue);
                         if (opt) pageEl.value = opt.value;
                     } else {
                         pageEl.value = originalValue;
