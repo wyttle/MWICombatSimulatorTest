@@ -119,5 +119,8 @@
         "mpOverTime" : "MP Over Time",
         "timeInSeconds" : "Time (seconds)",
         "waitingForData" : "Waiting for simulation data..."
-    }
+    },
+    "simLabyrinth" : "Sim Labyrinth",
+    "simAllLabyrinths" : "Sim All Labyrinths",
+    "roomLevel" : "Room Level"
 }

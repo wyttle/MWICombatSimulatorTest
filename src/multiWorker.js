@@ -34,6 +34,7 @@ onmessage = async function (event) {
                         const result = await new Promise((resolve, reject) => {
                             simulationWorker.onmessage = function (event) {
                                 if (event.data.type === "simulation_result") {
+                                    zoneProgress[event.data.zone+'#'+event.data.difficultyTier] = 1.0;
                                     resolve(event.data.simResult);
                                 } else if (event.data.type === "simulation_progress") {
                                     zoneProgress[event.data.zone+'#'+event.data.difficultyTier] = event.data.progress;
@@ -59,6 +60,66 @@ onmessage = async function (event) {
                 await Promise.all(workers);
 
                 this.postMessage({ type: "simulation_result_allZones", simResults: results });
+            } catch (e) {
+                console.log(e);
+                this.postMessage({ type: "simulation_error", error: e });
+            }
+            break;
+        case "start_simulation_all_labyrinths":
+            const labyrinthHrids = event.data.labyrinths;
+            let labyrinthProgress = Object.fromEntries(labyrinthHrids.map(labyrinth => [labyrinth.labyrinthHrid+'#'+labyrinth.roomLevel, 0]));
+            
+            try {
+                const maxWorkersLab = navigator.hardwareConcurrency;
+                console.log("maxWorkers: " + maxWorkersLab);
+
+                const labTaskQueue = [...labyrinthHrids];
+                const labResults = new Array(labyrinthHrids.length);
+                const outer_worker_lab = this;
+
+                const processLabTask = async (workerId) => {
+                    while (labTaskQueue.length > 0) {
+                        const labyrinthIndex = labyrinthHrids.length - labTaskQueue.length;
+                        const currentLabyrinth = labTaskQueue.shift();
+
+                        const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
+
+                        let workerMessage = {
+                            type: "start_simulation",
+                            players: event.data.players,
+                            labyrinth: currentLabyrinth,
+                            extra: event.data.extra,
+                            simulationTimeLimit: event.data.simulationTimeLimit,
+                        };
+                        simulationWorker.postMessage(workerMessage);
+                        
+                        const result = await new Promise((resolve, reject) => {
+                            simulationWorker.onmessage = function (event) {
+                                if (event.data.type === "simulation_result") {
+                                    labyrinthProgress[currentLabyrinth.labyrinthHrid+'#'+currentLabyrinth.roomLevel] = 1.0;
+                                    resolve(event.data.simResult);
+                                } else if (event.data.type === "simulation_progress") {
+                                    labyrinthProgress[currentLabyrinth.labyrinthHrid+'#'+currentLabyrinth.roomLevel] = event.data.progress;
+                                    let totalProgress = Object.values(labyrinthProgress).reduce((acc, progress) => acc + progress, 0) / Object.keys(labyrinthProgress).length;
+                                    outer_worker_lab.postMessage({ type: "simulation_progress", progress: totalProgress });
+                                } else if (event.data.type === "simulation_error") {
+                                    reject(event.data.error);
+                                }
+                            };
+                        });
+
+                        labResults[labyrinthIndex] = result;
+                        simulationWorker.terminate();
+                    }
+                };
+
+                const labWorkers = Array(Math.min(maxWorkersLab, labyrinthHrids.length))
+                    .fill()
+                    .map((_, index) => processLabTask(index));
+
+                await Promise.all(labWorkers);
+
+                this.postMessage({ type: "simulation_result_allLabyrinths", simResults: labResults });
             } catch (e) {
                 console.log(e);
                 this.postMessage({ type: "simulation_error", error: e });
