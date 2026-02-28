@@ -10,13 +10,15 @@ onmessage = async function (event) {
                 console.log("maxWorkers: " + maxWorkers);
 
                 const taskQueue = [...zoneHrids];
+                let nextIndex = 0;
                 const results = new Array(zoneHrids.length);
                 const outer_worker = this;
+                let reportedProgress = 0;
 
                 // 创建工作线程池
                 const processTask = async (workerId) => {
                     while (taskQueue.length > 0) {
-                        const zoneIndex = zoneHrids.length - taskQueue.length;
+                        const zoneIndex = nextIndex++;
                         const currentZone = taskQueue.shift();
 
                         const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
@@ -39,7 +41,10 @@ onmessage = async function (event) {
                                 } else if (event.data.type === "simulation_progress") {
                                     zoneProgress[event.data.zone+'#'+event.data.difficultyTier] = event.data.progress;
                                     let totalProgress = Object.values(zoneProgress).reduce((acc, progress) => acc + progress, 0) / Object.keys(zoneProgress).length;
-                                    outer_worker.postMessage({ type: "simulation_progress", progress: totalProgress });
+                                    if (totalProgress >= reportedProgress) {
+                                        reportedProgress = totalProgress;
+                                        outer_worker.postMessage({ type: "simulation_progress", progress: totalProgress });
+                                    }
                                 } else if (event.data.type === "simulation_error") {
                                     reject(event.data.error);
                                 }
@@ -74,12 +79,14 @@ onmessage = async function (event) {
                 console.log("maxWorkers: " + maxWorkersLab);
 
                 const labTaskQueue = [...labyrinthHrids];
+                let nextLabIndex = 0;
                 const labResults = new Array(labyrinthHrids.length);
                 const outer_worker_lab = this;
+                let reportedLabProgress = 0;
 
                 const processLabTask = async (workerId) => {
                     while (labTaskQueue.length > 0) {
-                        const labyrinthIndex = labyrinthHrids.length - labTaskQueue.length;
+                        const labyrinthIndex = nextLabIndex++;
                         const currentLabyrinth = labTaskQueue.shift();
 
                         const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
@@ -101,7 +108,10 @@ onmessage = async function (event) {
                                 } else if (event.data.type === "simulation_progress") {
                                     labyrinthProgress[currentLabyrinth.labyrinthHrid+'#'+currentLabyrinth.roomLevel] = event.data.progress;
                                     let totalProgress = Object.values(labyrinthProgress).reduce((acc, progress) => acc + progress, 0) / Object.keys(labyrinthProgress).length;
-                                    outer_worker_lab.postMessage({ type: "simulation_progress", progress: totalProgress });
+                                    if (totalProgress >= reportedLabProgress) {
+                                        reportedLabProgress = totalProgress;
+                                        outer_worker_lab.postMessage({ type: "simulation_progress", progress: totalProgress });
+                                    }
                                 } else if (event.data.type === "simulation_error") {
                                     reject(event.data.error);
                                 }
