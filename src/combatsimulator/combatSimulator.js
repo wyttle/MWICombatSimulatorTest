@@ -643,12 +643,10 @@ class CombatSimulator extends EventTarget {
                     let furyExpirationEvent = new FuryExpirationEvent(this.simulationTime + furyExpireTime, furyAmount, source);
                     this.eventQueue.addEvent(furyExpirationEvent);
 
-                    source.addBuff(furyAccuracyBuf, this.simulationTime);
-                    source.addBuff(furyDamageBuf, this.simulationTime);
+                    source.addBuffs([furyAccuracyBuf, furyDamageBuf], this.simulationTime);
                 }
                 else {
-                    source.removeBuff(furyAccuracyBuf);
-                    source.removeBuff(furyDamageBuf);
+                    source.removeBuffs([furyAccuracyBuf, furyDamageBuf]);
                 }
             }
 
@@ -1113,8 +1111,7 @@ class CombatSimulator extends EventTarget {
                     "startTime": "0001-01-01T00:00:00Z",
                     "duration": ENRAGE_TICK_INTERVAL
             };
-            enemy.addBuff(enrageDamageBuff);
-            enemy.addBuff(enrageAccuracyBuff);
+            enemy.addBuffs([enrageDamageBuff, enrageAccuracyBuff]);
 
             this.simResult.maxEnrageStack = Math.max(this.simResult.maxEnrageStack, nowStack);
         }
@@ -1618,12 +1615,10 @@ class CombatSimulator extends EventTarget {
                         let furyExpirationEvent = new FuryExpirationEvent(this.simulationTime + furyExpireTime, furyAmount, source);
                         this.eventQueue.addEvent(furyExpirationEvent);
 
-                        source.addBuff(furyAccuracyBuf, this.simulationTime);
-                        source.addBuff(furyDamageBuf, this.simulationTime);
+                        source.addBuffs([furyAccuracyBuf, furyDamageBuf], this.simulationTime);
                     }
                     else {
-                        source.removeBuff(furyAccuracyBuf);
-                        source.removeBuff(furyDamageBuf);
+                        source.removeBuffs([furyAccuracyBuf, furyDamageBuf]);
                     }
                 }
 

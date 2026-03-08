@@ -2856,9 +2856,11 @@ document.addEventListener('DOMContentLoaded', function () {
     function updatePlayerNames() {
         const tabLinks = document.querySelectorAll('#playerTab .nav-link');
         tabLinks.forEach((tabLink, index) => {
-            const label = document.querySelector(`label[for="player${index + 1}"]`);
+            const label = document.querySelectorAll(`label[for="player${index + 1}"]`);
             if (label) {
-                label.textContent = tabLink.textContent.trim();
+                label.forEach((l) => {
+                    l.textContent = tabLink.textContent.trim();
+                });
             }
         });
     }
@@ -3073,6 +3075,15 @@ function startSimulation(selectedPlayers) {
         extra.comDrop = Number(document.getElementById("comDropInput").value);
     }
     extra.enableHpMpVisualization = document.getElementById("hpMpVisualizationToggle").checked;
+    extra.personalBuffs = [];
+    if (document.getElementById("personalBuffsToggle").checked) {
+        let personalBuffs = document.getElementById("personalBuffsBox").querySelectorAll("input");
+        for (let buff of personalBuffs) {
+            if (buff.checked) {
+                extra.personalBuffs.push(buff.value);
+            }
+        }
+    }
 
     let simAllZonesToggle = document.getElementById("simAllZoneToggle");
     let simAllSoloToggle = document.getElementById("simAllSoloToggle");
@@ -3281,6 +3292,15 @@ document.getElementById("buttonUploadJSONSimulate").addEventListener("click", (e
     extra.comDrop = 0;
     if (document.getElementById("comDropToggle").checked) {
         extra.comDrop = Number(document.getElementById("comDropInput").value);
+    }
+    extra.personalBuffs = [];
+    if (document.getElementById("personalBuffsToggle").checked) {
+        let personalBuffs = document.getElementById("personalBuffsBox").querySelectorAll("input");
+        for (let buff of personalBuffs) {
+            if (buff.checked) {
+                extra.personalBuffs.push(buff.value);
+            }
+        }
     }
 
     let fileInput = document.getElementById("inputUploadJSONSimulation");
@@ -4744,6 +4764,42 @@ function initExtraBuffSection() {
     }
     comDropToggle.onchange = updateComDrop;
     comDropInput.onchange = updateComDrop;
+
+    // personalBuffs (seals)
+    const personalBuffKeys = [
+        "/items/seal_of_combat_drop",
+        "/items/seal_of_attack_speed",
+        "/items/seal_of_cast_speed",
+        "/items/seal_of_damage",
+        "/items/seal_of_critical_rate",
+        "/items/seal_of_wisdom",
+        "/items/seal_of_rare_find",
+    ];
+    const personalBuffsTable = document.getElementById('personalBuffsBox');
+    for (const buff of personalBuffKeys) {
+        const buffDiv = document.createElement('div');
+        buffDiv.className = 'form-check form-switch mb-1';
+        const buffInput = document.createElement('input');
+        buffInput.className = 'form-check-input';
+        buffInput.type = 'checkbox';
+        buffInput.id = buff.split('/').pop() + 'Toggle';
+        buffInput.value = buff;
+        buffDiv.appendChild(buffInput);
+        const buffLabel = document.createElement('label');
+        buffLabel.className = 'form-check-label';
+        buffLabel.setAttribute('for', buffInput.id);
+        buffLabel.innerHTML = buff;
+        buffLabel.setAttribute("data-i18n", "itemNames." + buff);
+        buffDiv.appendChild(buffLabel);
+
+        personalBuffsTable.appendChild(buffDiv);
+    }
+
+    let personalBuffsToggle = document.getElementById("personalBuffsToggle");
+    personalBuffsToggle.onchange = () => {
+        personalBuffsTable.classList.toggle('d-none');
+    }
+    
 }
 
 

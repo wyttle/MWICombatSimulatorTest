@@ -360,11 +360,50 @@ class CombatUnit {
         return aggregates;
     }
 
+    addBuffs(buffs, currentTime) {
+        buffs.forEach(buff => buff.startTime = currentTime);
+
+        let needUpdate = false;
+        for (const buff of buffs) {
+            if (!this.combatBuffs[buff.uniqueHrid] || this.combatBuffs[buff.uniqueHrid].ratioBoost != buff.ratioBoost || this.combatBuffs[buff.uniqueHrid].flatBoost != buff.flatBoost) {
+                needUpdate = true;
+            }
+            this.combatBuffs[buff.uniqueHrid] = buff;
+        }
+
+        if (needUpdate) {
+            this.updateCombatDetails();
+        }
+    }
+
     addBuff(buff, currentTime) {
         buff.startTime = currentTime;
+
+        let needUpdate = true;
+        if (this.combatBuffs[buff.uniqueHrid] && this.combatBuffs[buff.uniqueHrid].ratioBoost === buff.ratioBoost && this.combatBuffs[buff.uniqueHrid].flatBoost === buff.flatBoost) {
+            needUpdate = false;
+        }
+
         this.combatBuffs[buff.uniqueHrid] = buff;
 
-        this.updateCombatDetails();
+        if (needUpdate) {
+            this.updateCombatDetails();
+        }
+    }
+
+    removeBuffs(buffs) {
+        let needUpdate = false;
+        buffs.forEach(buff => {
+            if (!this.combatBuffs[buff.uniqueHrid]) {
+                return;
+            }
+            delete this.combatBuffs[buff.uniqueHrid];
+            needUpdate = true;
+        });
+
+        if (needUpdate) {
+            this.updateCombatDetails();
+        }
     }
 
     removeBuff(buff) {
@@ -486,12 +525,12 @@ class CombatUnit {
         if (currentTime == 0 || !this.isPlayer) {
             // 首次战斗开始 或 敌人重置：完全重置
             this.clearBuffs();
-            this.updateCombatDetails();
+            // updateCombatDetails() 在后续 addBuff/addBuffs 时会被调用
             this.resetCooldowns(currentTime);
         } else {
             // 地下城团灭重开（仅玩家）：只移除过期buff，保留CD
             this.removeExpiredBuffs(currentTime);
-            this.updateCombatDetails();
+            // updateCombatDetails() 在后续 addBuff/addBuffs 时会被调用
         }
 
         this.combatDetails.currentHitpoints = this.combatDetails.maxHitpoints;
