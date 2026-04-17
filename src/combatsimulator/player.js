@@ -59,123 +59,90 @@ class Player extends CombatUnit {
         return player;
     }
 
-    updateCombatDetails() {
+    static _equipStatNames = [
+        "stabAccuracy","slashAccuracy","smashAccuracy","rangedAccuracy","magicAccuracy",
+        "stabDamage","slashDamage","smashDamage","rangedDamage","magicDamage",
+        "defensiveDamage","taskDamage",
+        "physicalAmplify","waterAmplify","natureAmplify","fireAmplify","healingAmplify",
+        "stabEvasion","slashEvasion","smashEvasion","rangedEvasion","magicEvasion",
+        "armor","waterResistance","natureResistance","fireResistance",
+        "maxHitpoints","maxManapoints","lifeSteal","hpRegenPer10","mpRegenPer10",
+        "physicalThorns","elementalThorns",
+        "combatDropRate","combatRareFind","combatDropQuantity","combatExperience",
+        "criticalRate","criticalDamage",
+        "armorPenetration","waterPenetration","naturePenetration","firePenetration",
+        "abilityHaste","tenacity","manaLeech","castSpeed","threat",
+        "parry","mayhem","pierce","curse","fury","weaken","ripple","bloom","blaze",
+        "attackSpeed","foodHaste","drinkConcentration",
+        "autoAttackDamage","abilityDamage",
+        "staminaExperience","intelligenceExperience","attackExperience",
+        "defenseExperience","meleeExperience","rangedExperience","magicExperience",
+        "retaliation"
+    ];
+
+    _buildEquipmentCache() {
+        const names = Player._equipStatNames;
+        const cache = {};
+        const equips = [];
+        for (const key in this.equipment) {
+            if (this.equipment[key] != null) equips.push(this.equipment[key]);
+        }
+        for (let i = 0; i < names.length; i++) {
+            let sum = 0;
+            for (let j = 0; j < equips.length; j++) sum += equips[j].getCombatStat(names[i]);
+            cache[names[i]] = sum;
+        }
+
         if (this.equipment["/equipment_types/main_hand"]) {
-            this.combatDetails.combatStats.combatStyleHrid =
-                this.equipment["/equipment_types/main_hand"].getCombatStyle();
-            this.combatDetails.combatStats.damageType = this.equipment["/equipment_types/main_hand"].getDamageType();
-            this.combatDetails.combatStats.attackInterval =
-                this.equipment["/equipment_types/main_hand"].getCombatStat("attackInterval");
-            this.combatDetails.combatStats.primaryTraining = 
-                this.equipment["/equipment_types/main_hand"].getPrimaryTraining();
+            const w = this.equipment["/equipment_types/main_hand"];
+            cache._combatStyleHrid = w.getCombatStyle();
+            cache._damageType = w.getDamageType();
+            cache._attackInterval = w.getCombatStat("attackInterval");
+            cache._primaryTraining = w.getPrimaryTraining();
         } else if (this.equipment["/equipment_types/two_hand"]) {
-            this.combatDetails.combatStats.combatStyleHrid =
-                this.equipment["/equipment_types/two_hand"].getCombatStyle();
-            this.combatDetails.combatStats.damageType = this.equipment["/equipment_types/two_hand"].getDamageType();
-            this.combatDetails.combatStats.attackInterval =
-                this.equipment["/equipment_types/two_hand"].getCombatStat("attackInterval");
-            this.combatDetails.combatStats.primaryTraining = 
-                this.equipment["/equipment_types/two_hand"].getPrimaryTraining();
+            const w = this.equipment["/equipment_types/two_hand"];
+            cache._combatStyleHrid = w.getCombatStyle();
+            cache._damageType = w.getDamageType();
+            cache._attackInterval = w.getCombatStat("attackInterval");
+            cache._primaryTraining = w.getPrimaryTraining();
         } else {
-            this.combatDetails.combatStats.combatStyleHrid = "/combat_styles/smash";
-            this.combatDetails.combatStats.damageType = "/damage_types/physical";
-            this.combatDetails.combatStats.attackInterval = 3000000000;
-            this.combatDetails.combatStats.primaryTraining = "/skills/melee";
+            cache._combatStyleHrid = "/combat_styles/smash";
+            cache._damageType = "/damage_types/physical";
+            cache._attackInterval = 3000000000;
+            cache._primaryTraining = "/skills/melee";
         }
 
-        if (this.equipment["/equipment_types/charm"]) {
-            this.combatDetails.combatStats.focusTraining = this.equipment["/equipment_types/charm"].getFocusTraining();
-        } else {
-            this.combatDetails.combatStats.focusTraining = "";
-        }
-
-        [
-            "stabAccuracy",
-            "slashAccuracy",
-            "smashAccuracy",
-            "rangedAccuracy",
-            "magicAccuracy",
-            "stabDamage",
-            "slashDamage",
-            "smashDamage",
-            "rangedDamage",
-            "magicDamage",
-            "defensiveDamage",
-            "taskDamage",
-            "physicalAmplify",
-            "waterAmplify",
-            "natureAmplify",
-            "fireAmplify",
-            "healingAmplify",
-            "stabEvasion",
-            "slashEvasion",
-            "smashEvasion",
-            "rangedEvasion",
-            "magicEvasion",
-            "armor",
-            "waterResistance",
-            "natureResistance",
-            "fireResistance",
-            "maxHitpoints",
-            "maxManapoints",
-            "lifeSteal",
-            "hpRegenPer10",
-            "mpRegenPer10",
-            "physicalThorns",
-            "elementalThorns",
-            "combatDropRate",
-            "combatRareFind",
-            "combatDropQuantity",
-            "combatExperience",
-            "criticalRate",
-            "criticalDamage",
-            "armorPenetration",
-            "waterPenetration",
-            "naturePenetration",
-            "firePenetration",
-            "abilityHaste",
-            "tenacity",
-            "manaLeech",
-            "castSpeed",
-            "threat",
-            "parry",
-            "mayhem",
-            "pierce",
-            "curse",
-            "fury",
-            "weaken",
-            "ripple",
-            "bloom",
-            "blaze",
-            "attackSpeed",
-            "foodHaste",
-            "drinkConcentration",
-            "autoAttackDamage",
-            "abilityDamage",
-            "staminaExperience",
-            "intelligenceExperience",
-            "attackExperience",
-            "defenseExperience",
-            "meleeExperience",
-            "rangedExperience",
-            "magicExperience",
-            "retaliation"
-        ].forEach((stat) => {
-            this.combatDetails.combatStats[stat] = Object.values(this.equipment)
-                .filter((equipment) => equipment != null)
-                .map((equipment) => equipment.getCombatStat(stat))
-                .reduce((prev, cur) => prev + cur, 0);
-        });
+        cache._focusTraining = this.equipment["/equipment_types/charm"]
+            ? this.equipment["/equipment_types/charm"].getFocusTraining() : "";
 
         if (this.equipment["/equipment_types/pouch"]) {
-            this.combatDetails.combatStats.foodSlots =
-                1 + this.equipment["/equipment_types/pouch"].getCombatStat("foodSlots");
-            this.combatDetails.combatStats.drinkSlots =
-                1 + this.equipment["/equipment_types/pouch"].getCombatStat("drinkSlots");
+            cache._foodSlots = 1 + this.equipment["/equipment_types/pouch"].getCombatStat("foodSlots");
+            cache._drinkSlots = 1 + this.equipment["/equipment_types/pouch"].getCombatStat("drinkSlots");
         } else {
-            this.combatDetails.combatStats.foodSlots = 1;
-            this.combatDetails.combatStats.drinkSlots = 1;
+            cache._foodSlots = 1;
+            cache._drinkSlots = 1;
         }
+
+        this._equipCache = cache;
+        this._equipCacheDirty = false;
+    }
+
+    updateCombatDetails() {
+        if (!this._equipCache || this._equipCacheDirty) this._buildEquipmentCache();
+        const cache = this._equipCache;
+        const stats = this.combatDetails.combatStats;
+        const names = Player._equipStatNames;
+
+        stats.combatStyleHrid = cache._combatStyleHrid;
+        stats.damageType = cache._damageType;
+        stats.attackInterval = cache._attackInterval;
+        stats.primaryTraining = cache._primaryTraining;
+        stats.focusTraining = cache._focusTraining;
+
+        for (let i = 0; i < names.length; i++) stats[names[i]] = cache[names[i]];
+
+        stats.foodSlots = cache._foodSlots;
+        stats.drinkSlots = cache._drinkSlots;
 
         super.updateCombatDetails();
     }

@@ -369,6 +369,7 @@ function updateEquipmentState() {
         let enhancementLevel = Number(document.getElementById("inputEquipmentEnhancementLevel_" + selectType).value);
         player.equipment[equipmentType] = new Equipment(gameItem.hrid, enhancementLevel);
     });
+    player._equipCacheDirty = true;
 }
 
 document.getElementById("selectEquipment_set").onchange = changeEquipmentSetListener;
