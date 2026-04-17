@@ -41,6 +41,7 @@ class CombatSimulator extends EventTarget {
         this.simResult = new SimResult(zone, labyrinth, players.length);
         this.allPlayersDead = false;
         this.enableHpMpVisualization = options.enableHpMpVisualization || false;
+        this._aliveTargetsBuf = new Array(32);
 
         this.wipeLogs = {
             buffer: new Array(200),
@@ -51,15 +52,16 @@ class CombatSimulator extends EventTarget {
     }
 
     // 优化：预计算威胁值范围，避免重复计算
-    _selectTargetByThreat(aliveTargets) {
-        if (aliveTargets.length <= 1) {
+    _selectTargetByThreat(aliveTargets, count) {
+        const n = count !== undefined ? count : aliveTargets.length;
+        if (n <= 1) {
             return aliveTargets[0] || null;
         }
 
         let cumulativeThreat = 0;
-        const cumulativeRanges = new Array(aliveTargets.length);
+        const cumulativeRanges = new Array(n);
 
-        for (let i = 0; i < aliveTargets.length; i++) {
+        for (let i = 0; i < n; i++) {
             const player = aliveTargets[i];
             const playerThreat = player.combatDetails.combatStats.threat;
             cumulativeRanges[i] = {
@@ -206,7 +208,7 @@ class CombatSimulator extends EventTarget {
         this.simResult.addWipeEvent(logs, this.simulationTime, wave);
     }
 
-    async simulate(simulationTimeLimit) {
+    simulate(simulationTimeLimit) {
         this.reset();
 
         let ticks = 0;
@@ -216,12 +218,11 @@ class CombatSimulator extends EventTarget {
 
         while (this.simulationTime < simulationTimeLimit) {
             let nextEvent = this.eventQueue.getNextEvent();
-            await this.processEvent(nextEvent);
+            this.processEvent(nextEvent);
 
             ticks++;
             if (ticks == 1000) {
                 ticks = 0;
-                // 收集HP/MP时序数据
                 if (this.enableHpMpVisualization) {
                     this.simResult.addTimeSeriesSnapshot(this.simulationTime, this.players);
                 }
@@ -247,7 +248,6 @@ class CombatSimulator extends EventTarget {
 
         this.simResult.isDungeon = this.zone?.isDungeon ?? false;
         if (this.zone && this.simResult.isDungeon) {
-            console.log("Timeout now at wave #" + (this.zone.encountersKilled - 1));
 
             this.simResult.dungeonsCompleted = this.zone.dungeonsCompleted;
             this.simResult.dungeonsFailed = this.zone.dungeonsFailed;
@@ -292,7 +292,7 @@ class CombatSimulator extends EventTarget {
     }
 
     // 按次数模拟地下城（用于并行模拟）
-    async simulateDungeonByCount(targetCount, progressCallback = null) {
+    simulateDungeonByCount(targetCount, progressCallback = null) {
         if (!this.zone.isDungeon) {
             throw new Error("simulateDungeonByCount only works for dungeon zones");
         }
@@ -308,7 +308,7 @@ class CombatSimulator extends EventTarget {
         // 模拟直到完成指定次数的地下城（成功+失败）
         while ((this.zone.dungeonsCompleted + this.zone.dungeonsFailed) < targetCount) {
             let nextEvent = this.eventQueue.getNextEvent();
-            await this.processEvent(nextEvent);
+            this.processEvent(nextEvent);
 
             ticks++;
             if (ticks == 1000) {
@@ -363,7 +363,7 @@ class CombatSimulator extends EventTarget {
         this.simResult = new SimResult(this.zone, this.labyrinth, this.players.length);
     }
 
-    async processEvent(event) {
+    processEvent(event) {
         this.simulationTime = event.time;
 
         // console.log(this.simulationTime / 1e9, event.type, event);
@@ -557,12 +557,18 @@ class CombatSimulator extends EventTarget {
             return;
         }
 
-        const aliveTargets = targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0);
+        let aliveCount = 0;
+        const aliveTargets = this._aliveTargetsBuf;
+        for (let j = 0; j < targets.length; j++) {
+            if (targets[j] && targets[j].combatDetails.currentHitpoints > 0) {
+                aliveTargets[aliveCount++] = targets[j];
+            }
+        }
 
-        for (let i = 0; i < aliveTargets.length; i++) {
+        for (let i = 0; i < aliveCount; i++) {
             let target = aliveTargets[i];
-            if (!event.source.isPlayer && aliveTargets.length > 1) {
-                target = this._selectTargetByThreat(aliveTargets);
+            if (!event.source.isPlayer && aliveCount > 1) {
+                target = this._selectTargetByThreat(aliveTargets, aliveCount);
             }
             let source = event.source;
 
@@ -672,7 +678,7 @@ class CombatSimulator extends EventTarget {
                 this.eventQueue.addEvent(weakenExpirationEvent);
             }
 
-            if (!mayhem || (mayhem && attackResult.didHit) || (mayhem && i == (aliveTargets.length - 1))) {
+            if (!mayhem || (mayhem && attackResult.didHit) || (mayhem && i == (aliveCount - 1))) {
                 let attackType = "autoAttack";
                 if (parryTarget) attackType = "parry";
                 this.simResult.addAttack(
@@ -771,7 +777,8 @@ class CombatSimulator extends EventTarget {
                 console.log("WARN: Some enemies have no experience rate");
             }
 
-            let totalExp = this.enemies.map(enemy => enemy.experience * enemy.experienceRate).reduce((a, b) => a + b, 0);
+            let totalExp = 0;
+            for (let k = 0; k < this.enemies.length; k++) totalExp += this.enemies[k].experience * this.enemies[k].experienceRate;
             this.players.forEach(player => {
                 this.simResult.addExperienceGain(player, totalExp / this.players.length);
             });
@@ -809,8 +816,6 @@ class CombatSimulator extends EventTarget {
         ) {
             if (this.zone) {
                 if (this.zone.isDungeon) {
-                    console.log("All Players died at wave #" + (this.zone.encountersKilled - 1) + " with ememies: " + this.enemies.map(enemy => (enemy.hrid+"("+(enemy.combatDetails.currentHitpoints*100/enemy.combatDetails.maxHitpoints).toFixed(2)+"%)")).join(", "));
-
                     this.saveWipeLogsToSimResult(this.zone.encountersKilled - 1);
                     // console.log(this.simResult)
                     this.wipeLogs.index = 0;
@@ -1072,7 +1077,6 @@ class CombatSimulator extends EventTarget {
 
     processFuryExpirationEvent(event) {
         event.source.removeExpiredBuffs(this.simulationTime);
-        console.log("Fury Timeout");
     }
 
     processEnrageTickEvent(event) {
@@ -1088,8 +1092,6 @@ class CombatSimulator extends EventTarget {
             if (nowStack <= 0) {
                 continue;
             }
-
-            console.log(enemy.hrid, nowStack, " stack Enrage at ", (event.encounterTime / ONE_SECOND));
 
             const enrageDamageBuff = {
                     "uniqueHrid": "/buff_uniques/enrage_damage",

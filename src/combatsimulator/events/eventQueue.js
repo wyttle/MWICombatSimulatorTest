@@ -1,52 +1,81 @@
-import Heap from "heap-js";
+class MinHeap {
+    constructor() {
+        this._data = [];
+    }
 
-/**
- * Optimized EventQueue with O(1) lookups by type and source
- * Uses auxiliary indexes to avoid O(n) scans on clearMatching/getMatching
- */
+    get length() { return this._data.length; }
+
+    push(item) {
+        const data = this._data;
+        data.push(item);
+        let i = data.length - 1;
+        const t = item.time;
+        while (i > 0) {
+            const pi = (i - 1) >> 1;
+            if (data[pi].time <= t) break;
+            data[i] = data[pi];
+            i = pi;
+        }
+        data[i] = item;
+    }
+
+    pop() {
+        const data = this._data;
+        const len = data.length;
+        if (len === 0) return undefined;
+        const top = data[0];
+        if (len === 1) { data.length = 0; return top; }
+        const last = data.pop();
+        const n = data.length;
+        const t = last.time;
+        let i = 0;
+        const half = n >> 1;
+        while (i < half) {
+            let ci = (i << 1) + 1;
+            let ct = data[ci].time;
+            const ri = ci + 1;
+            if (ri < n && data[ri].time < ct) { ci = ri; ct = data[ri].time; }
+            if (t <= ct) break;
+            data[i] = data[ci];
+            i = ci;
+        }
+        data[i] = last;
+        return top;
+    }
+
+    toArray() { return this._data; }
+}
+
 class EventQueue {
     constructor() {
-        this.minHeap = new Heap((a, b) => a.time - b.time);
-        // Index: type -> Set of events
+        this.minHeap = new MinHeap();
         this.byType = new Map();
-        // Index: source -> Set of events
         this.bySource = new Map();
-        // Index: target -> Set of events
         this.byTarget = new Map();
-        // Track deleted events (lazy deletion)
         this.deleted = new WeakSet();
     }
 
     addEvent(event) {
         this.minHeap.push(event);
 
-        // Index by type
         if (event.type !== undefined) {
-            if (!this.byType.has(event.type)) {
-                this.byType.set(event.type, new Set());
-            }
-            this.byType.get(event.type).add(event);
+            let s = this.byType.get(event.type);
+            if (!s) { s = new Set(); this.byType.set(event.type, s); }
+            s.add(event);
         }
-
-        // Index by source
         if (event.source !== undefined) {
-            if (!this.bySource.has(event.source)) {
-                this.bySource.set(event.source, new Set());
-            }
-            this.bySource.get(event.source).add(event);
+            let s = this.bySource.get(event.source);
+            if (!s) { s = new Set(); this.bySource.set(event.source, s); }
+            s.add(event);
         }
-
-        // Index by target
         if (event.target !== undefined) {
-            if (!this.byTarget.has(event.target)) {
-                this.byTarget.set(event.target, new Set());
-            }
-            this.byTarget.get(event.target).add(event);
+            let s = this.byTarget.get(event.target);
+            if (!s) { s = new Set(); this.byTarget.set(event.target, s); }
+            s.add(event);
         }
     }
 
     getNextEvent() {
-        // Skip deleted events (lazy deletion)
         while (this.minHeap.length > 0) {
             const event = this.minHeap.pop();
             if (!this.deleted.has(event)) {
@@ -59,22 +88,16 @@ class EventQueue {
 
     _removeFromIndexes(event) {
         if (event.type !== undefined) {
-            const typeSet = this.byType.get(event.type);
-            if (typeSet) {
-                typeSet.delete(event);
-            }
+            const s = this.byType.get(event.type);
+            if (s) s.delete(event);
         }
         if (event.source !== undefined) {
-            const sourceSet = this.bySource.get(event.source);
-            if (sourceSet) {
-                sourceSet.delete(event);
-            }
+            const s = this.bySource.get(event.source);
+            if (s) s.delete(event);
         }
         if (event.target !== undefined) {
-            const targetSet = this.byTarget.get(event.target);
-            if (targetSet) {
-                targetSet.delete(event);
-            }
+            const s = this.byTarget.get(event.target);
+            if (s) s.delete(event);
         }
     }
 
@@ -84,24 +107,21 @@ class EventQueue {
     }
 
     containsEventOfType(type) {
-        const typeSet = this.byType.get(type);
-        return typeSet && typeSet.size > 0;
+        const s = this.byType.get(type);
+        return s != null && s.size > 0;
     }
 
     containsEventOfTypeAndHrid(type, hrid) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return false;
-
-        for (const event of typeSet) {
-            if (event.hrid === hrid) {
-                return true;
-            }
+        const s = this.byType.get(type);
+        if (!s) return false;
+        for (const event of s) {
+            if (event.hrid === hrid) return true;
         }
         return false;
     }
 
     clear() {
-        this.minHeap = new Heap((a, b) => a.time - b.time);
+        this.minHeap = new MinHeap();
         this.byType.clear();
         this.bySource.clear();
         this.byTarget.clear();
@@ -109,153 +129,95 @@ class EventQueue {
     }
 
     clearEventsForUnit(unit) {
-        // Get events where unit is source or target
-        // Copy to array first to avoid modifying Set during iteration
         const sourceEvents = this.bySource.get(unit);
         const targetEvents = this.byTarget.get(unit);
-
         if (sourceEvents) {
-            const eventsToDelete = [...sourceEvents];
-            for (const event of eventsToDelete) {
-                this._markDeleted(event);
-            }
+            for (const event of [...sourceEvents]) this._markDeleted(event);
         }
         if (targetEvents) {
-            const eventsToDelete = [...targetEvents];
-            for (const event of eventsToDelete) {
-                this._markDeleted(event);
-            }
+            for (const event of [...targetEvents]) this._markDeleted(event);
         }
     }
 
     clearEventsOfType(type) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return;
-
-        // Copy to array first to avoid modifying Set during iteration
-        const eventsToDelete = [...typeSet];
-        for (const event of eventsToDelete) {
-            this._markDeleted(event);
-        }
+        const s = this.byType.get(type);
+        if (!s) return;
+        for (const event of [...s]) this._markDeleted(event);
         this.byType.delete(type);
     }
 
-    // Optimized clearMatching - tries to use indexes when possible
     clearMatching(fn) {
         let cleared = false;
-
-        // We still need to iterate, but use lazy deletion
         const heapEvents = this.minHeap.toArray();
-
         for (const event of heapEvents) {
             if (this.deleted.has(event)) continue;
-            if (fn(event)) {
-                this._markDeleted(event);
-                cleared = true;
-            }
+            if (fn(event)) { this._markDeleted(event); cleared = true; }
         }
         return cleared;
     }
 
-    // Optimized: clear by type and source (common pattern)
     clearByTypeAndSource(type, source) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return false;
-
+        const s = this.byType.get(type);
+        if (!s) return false;
         let cleared = false;
-        // Copy to array first to avoid modifying Set during iteration
-        const eventsToCheck = [...typeSet];
-        for (const event of eventsToCheck) {
-            if (event.source === source) {
-                this._markDeleted(event);
-                cleared = true;
-            }
+        for (const event of [...s]) {
+            if (event.source === source) { this._markDeleted(event); cleared = true; }
         }
         return cleared;
     }
 
-    // Optimized: clear by type and target (common pattern)
     clearByTypeAndTarget(type, target) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return false;
-
+        const s = this.byType.get(type);
+        if (!s) return false;
         let cleared = false;
-        // Copy to array first to avoid modifying Set during iteration
-        const eventsToCheck = [...typeSet];
-        for (const event of eventsToCheck) {
-            if (event.target === target) {
-                this._markDeleted(event);
-                cleared = true;
-            }
+        for (const event of [...s]) {
+            if (event.target === target) { this._markDeleted(event); cleared = true; }
         }
         return cleared;
     }
 
-    // Optimized getMatching - tries to use indexes when possible
     getMatching(fn) {
         const heapEvents = this.minHeap.toArray();
-
         for (const event of heapEvents) {
             if (this.deleted.has(event)) continue;
-            if (fn(event)) {
-                return event;
-            }
+            if (fn(event)) return event;
         }
         return null;
     }
 
-    // Optimized: get by type and source (common pattern)
     getByTypeAndSource(type, source) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return null;
-
-        for (const event of typeSet) {
-            if (event.source === source) {
-                return event;
-            }
+        const s = this.byType.get(type);
+        if (!s) return null;
+        for (const event of s) {
+            if (event.source === source) return event;
         }
         return null;
     }
 
-    // Optimized: get by type and target
     getByTypeAndTarget(type, target) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return null;
-
-        for (const event of typeSet) {
-            if (event.target === target) {
-                return event;
-            }
+        const s = this.byType.get(type);
+        if (!s) return null;
+        for (const event of s) {
+            if (event.target === target) return event;
         }
         return null;
     }
 
-    // Check if any event matches type and source exists
     hasEventOfTypeAndSource(type, source) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return false;
-
-        for (const event of typeSet) {
-            if (event.source === source) {
-                return true;
-            }
+        const s = this.byType.get(type);
+        if (!s) return false;
+        for (const event of s) {
+            if (event.source === source) return true;
         }
         return false;
     }
 
-    // Optimized: clear by type and hrid (for PlayerRespawnEvent)
     clearByTypeAndHrid(type, hrid) {
-        const typeSet = this.byType.get(type);
-        if (!typeSet) return false;
-
+        const s = this.byType.get(type);
+        if (!s) return false;
         let cleared = false;
-        // Copy to array first to avoid modifying Set during iteration
-        const eventsToCheck = [...typeSet];
-        for (const event of eventsToCheck) {
-            if (event.hrid === hrid) {
-                this._markDeleted(event);
-                cleared = true;
-            }
+        for (const event of [...s]) {
+            if (event.hrid === hrid) { this._markDeleted(event); cleared = true; }
         }
         return cleared;
     }

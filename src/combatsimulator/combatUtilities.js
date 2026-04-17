@@ -40,6 +40,11 @@ class CombatUtilities {
         }
     };
 
+    static _result = {
+        damageDone: 0, didHit: false, thornDamageDone: 0, thornType: "",
+        retaliationDamageDone: 0, lifeStealHeal: 0, hpDrain: 0, manaLeechMana: 0, isCrit: false
+    };
+
     static getTarget(enemies) {
         if (!enemies) {
             return null;
@@ -271,7 +276,17 @@ class CombatUtilities {
             manaLeechMana = source.addManapoints(Math.floor(source.combatDetails.combatStats.manaLeech * damageDone));
         }
 
-        return { damageDone, didHit, thornDamageDone, thornType, retaliationDamageDone, lifeStealHeal, hpDrain, manaLeechMana, isCrit};
+        const r = CombatUtilities._result;
+        r.damageDone = damageDone;
+        r.didHit = didHit;
+        r.thornDamageDone = thornDamageDone;
+        r.thornType = thornType;
+        r.retaliationDamageDone = retaliationDamageDone;
+        r.lifeStealHeal = lifeStealHeal;
+        r.hpDrain = hpDrain;
+        r.manaLeechMana = manaLeechMana;
+        r.isCrit = isCrit;
+        return r;
     }
 
     static processHeal(source, abilityEffect, target) {
