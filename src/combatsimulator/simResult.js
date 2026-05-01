@@ -37,6 +37,8 @@ class SimResult {
         this.numberOfPlayers = numberOfPlayers;
         this.maxEnrageStack = 0;
         this.minDungenonTime = 0;
+        this.maxDungenonTime = 0;
+        this.labyAttemptCount = 0;
         this.lastDungeonFinishTime = 0;
         this.lastEncounterFinishTime = 0;
 
@@ -93,6 +95,10 @@ class SimResult {
 
         if (this.minDungenonTime == 0 || this.minDungenonTime > currentDungenonTime) {
             this.minDungenonTime = currentDungenonTime;
+        }
+
+        if (this.maxDungenonTime < currentDungenonTime) {
+            this.maxDungenonTime = currentDungenonTime;
         }
     }
 
@@ -406,6 +412,12 @@ class SimResult {
                 this.minDungenonTime = other.minDungenonTime;
             }
         }
+
+        // 合并 maxDungenonTime (取最大值)
+        this.maxDungenonTime = Math.max(this.maxDungenonTime, other.maxDungenonTime || 0);
+
+        // 合并 labyAttemptCount
+        this.labyAttemptCount = (this.labyAttemptCount || 0) + (other.labyAttemptCount || 0);
 
         // 合并 lastDungeonFinishTime (累加，因为多worker按次数模拟时各自有独立时间轴)
         this.lastDungeonFinishTime += other.lastDungeonFinishTime;

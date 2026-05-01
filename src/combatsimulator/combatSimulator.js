@@ -288,6 +288,10 @@ class CombatSimulator extends EventTarget {
             }
         }
 
+        if (this.labyrinth) {
+            this.simResult.labyAttemptCount = this.labyrinth.attemptCount;
+        }
+
         return this.simResult;
     }
 
@@ -980,7 +984,7 @@ class CombatSimulator extends EventTarget {
         event.target.combatDetails.currentHitpoints -= damage;
         this.simResult.addAttack(event.sourceRef, event.target, "damageOverTime", damage);
 
-        if (this.zone?.isDungeon) {
+        if (this.zone?.isDungeon && event.target.isPlayer) {
             const log = this.buildCombatLog("", "damageOverTime", event.target, damage);
             this.addToWipeLogs(log);
         }

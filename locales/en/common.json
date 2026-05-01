@@ -72,9 +72,11 @@
         "dungeonsFailed": "Dungeons Failed",
         "averageTime": "Average Time",
         "minimumTime": "Minimum Time",
+        "maximumTime": "Maximum Time",
         "maxEnrageStack": "Max Stack of Enrage",
         "debuffOnLevelGap": "Debuff on Level Gap",
-        "teamDps": "Team DPS"
+        "labySuccessRate" : "Labyrinth Success Rate",
+        "labyAttemptCount" : "Labyrinth Attempt Count"
     },
     "selectPlayer": "SelectPlayer",
     "selectAllOrNot": "Select / Deselect All",
@@ -83,9 +85,6 @@
     "simAllSolos": "Sim All Solos",
     "selectSolo": "Select Solo Target",
     "simDungeon": "Sim Dungeon",
-    "loadJigs": "Load JIGS",
-    "dungeonCount": "Dungeon Count",
-    "parallelCount": "Parallel Workers",
     "simulationSettings": "Simulation Settings",
     "allZonesData": "All Zones Data",
     "simulateAllZonesResults" : "Simulate All Zones Results",
