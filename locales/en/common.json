@@ -76,8 +76,11 @@
         "maxEnrageStack": "Max Stack of Enrage",
         "debuffOnLevelGap": "Debuff on Level Gap",
         "labySuccessRate" : "Labyrinth Success Rate",
-        "labyAttemptCount" : "Labyrinth Attempt Count"
+        "labyAttemptCount" : "Labyrinth Attempt Count",
+        "teamDps": "Team DPS"
     },
+    "dungeonCount": "Dungeon Count",
+    "parallelCount": "Parallel Workers",
     "selectPlayer": "SelectPlayer",
     "selectAllOrNot": "Select / Deselect All",
     "simulationOption": "Simulation Option",
