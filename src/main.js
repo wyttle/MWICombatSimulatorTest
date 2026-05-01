@@ -2123,7 +2123,6 @@ function showKills(simResult, playerToDisplay) {
     }
 
     if (simResult.labyAttemptCount > 0) {
-        let hoursSimulated = simResult.simulatedTime / ONE_HOUR;
         let labyAttemptCountRow = createRow(["col-md-6", "col-md-6 text-end"], ["Labyrinth Attempt Count", (simResult.labyAttemptCount / hoursSimulated).toFixed(1)]);
         labyAttemptCountRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.labyAttemptCount");
         newChildren.push(labyAttemptCountRow);
