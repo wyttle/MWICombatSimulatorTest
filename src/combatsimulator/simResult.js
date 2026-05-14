@@ -49,9 +49,13 @@ class SimResult {
             timestamps: [],
             players: {}
         };
+        this._lastSentIndex = 0;
     }
 
     addWipeEvent(logs, simulationTime, wave) {
+        if (this.wipeEvents.length >= 50) {
+            this.wipeEvents.shift();
+        }
         this.wipeEvents.push({
             simulationTime: simulationTime,
             logs: logs,
@@ -171,14 +175,16 @@ class SimResult {
             this.attacks[source.hrid][target.hrid] = {};
         }
         if (!this.attacks[source.hrid][target.hrid][ability]) {
-            this.attacks[source.hrid][target.hrid][ability] = {};
+            this.attacks[source.hrid][target.hrid][ability] = { casts: 0, misses: 0, totalDamage: 0 };
         }
 
-        if (!this.attacks[source.hrid][target.hrid][ability][hit]) {
-            this.attacks[source.hrid][target.hrid][ability][hit] = 0;
+        const stats = this.attacks[source.hrid][target.hrid][ability];
+        stats.casts += 1;
+        if (hit === "miss") {
+            stats.misses += 1;
+        } else {
+            stats.totalDamage += hit;
         }
-
-        this.attacks[source.hrid][target.hrid][ability][hit] += 1;
     }
 
     addConsumableUse(unit, consumable) {
@@ -274,8 +280,12 @@ class SimResult {
         }
     }
 
-    // 添加时间序列数据点
+    // 添加时间序列数据点（上限 5000 点，防止内存溢出）
     addTimeSeriesSnapshot(time, players) {
+        if (this.timeSeriesData.timestamps.length >= 5000) {
+            return;
+        }
+
         this.timeSeriesData.timestamps.push(time);
 
         players.forEach(player => {
@@ -294,6 +304,31 @@ class SimResult {
             playerData.maxHp.push(player.combatDetails.maxHitpoints);
             playerData.maxMp.push(player.combatDetails.maxManapoints);
         });
+    }
+
+    // 获取自上次发送以来的增量数据
+    getTimeSeriesDelta() {
+        const startIdx = this._lastSentIndex;
+        const endIdx = this.timeSeriesData.timestamps.length;
+
+        if (endIdx <= startIdx) return null;
+
+        const delta = {
+            timestamps: this.timeSeriesData.timestamps.slice(startIdx, endIdx),
+            players: {}
+        };
+
+        for (const [playerId, playerData] of Object.entries(this.timeSeriesData.players)) {
+            delta.players[playerId] = {
+                hp: playerData.hp.slice(startIdx, endIdx),
+                mp: playerData.mp.slice(startIdx, endIdx),
+                maxHp: playerData.maxHp.slice(startIdx, endIdx),
+                maxMp: playerData.maxMp.slice(startIdx, endIdx),
+            };
+        }
+
+        this._lastSentIndex = endIdx;
+        return delta;
     }
 
     // 合并另一个 SimResult 的数据（用于并行模拟结果合并）
@@ -319,7 +354,7 @@ class SimResult {
         // 合并 encounters
         this.encounters += other.encounters;
 
-        // 合并 attacks (深度嵌套对象)
+        // 合并 attacks
         for (const [sourceHrid, targets] of Object.entries(other.attacks)) {
             if (!this.attacks[sourceHrid]) {
                 this.attacks[sourceHrid] = {};
@@ -328,14 +363,14 @@ class SimResult {
                 if (!this.attacks[sourceHrid][targetHrid]) {
                     this.attacks[sourceHrid][targetHrid] = {};
                 }
-                for (const [ability, hits] of Object.entries(abilities)) {
+                for (const [ability, stats] of Object.entries(abilities)) {
                     if (!this.attacks[sourceHrid][targetHrid][ability]) {
-                        this.attacks[sourceHrid][targetHrid][ability] = {};
+                        this.attacks[sourceHrid][targetHrid][ability] = { casts: 0, misses: 0, totalDamage: 0 };
                     }
-                    for (const [hit, count] of Object.entries(hits)) {
-                        this.attacks[sourceHrid][targetHrid][ability][hit] =
-                            (this.attacks[sourceHrid][targetHrid][ability][hit] || 0) + count;
-                    }
+                    const existing = this.attacks[sourceHrid][targetHrid][ability];
+                    existing.casts += stats.casts;
+                    existing.misses += stats.misses;
+                    existing.totalDamage += stats.totalDamage;
                 }
             }
         }

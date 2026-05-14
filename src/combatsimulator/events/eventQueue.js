@@ -53,6 +53,7 @@ class EventQueue {
         this.bySource = new Map();
         this.byTarget = new Map();
         this.deleted = new WeakSet();
+        this._deletedCount = 0;
     }
 
     addEvent(event) {
@@ -82,6 +83,7 @@ class EventQueue {
                 this._removeFromIndexes(event);
                 return event;
             }
+            this._deletedCount--;
         }
         return undefined;
     }
@@ -104,6 +106,23 @@ class EventQueue {
     _markDeleted(event) {
         this.deleted.add(event);
         this._removeFromIndexes(event);
+        this._deletedCount++;
+        if (this._deletedCount > 500 && this._deletedCount > this.minHeap.length) {
+            this._compact();
+        }
+    }
+
+    _compact() {
+        const oldData = this.minHeap._data;
+        const newHeap = new MinHeap();
+        for (let i = 0; i < oldData.length; i++) {
+            if (!this.deleted.has(oldData[i])) {
+                newHeap.push(oldData[i]);
+            }
+        }
+        this.minHeap = newHeap;
+        this.deleted = new WeakSet();
+        this._deletedCount = 0;
     }
 
     containsEventOfType(type) {
@@ -126,6 +145,7 @@ class EventQueue {
         this.bySource.clear();
         this.byTarget.clear();
         this.deleted = new WeakSet();
+        this._deletedCount = 0;
     }
 
     clearEventsForUnit(unit) {

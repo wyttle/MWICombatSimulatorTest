@@ -75,9 +75,8 @@ function onWorkerMessage(event) {
             let progress = Math.floor(100 * event.data.progress);
             progressbar.style.width = progress + "%";
             progressbar.innerHTML = progress + "% (" + ((Date.now() - simStartTime) / 1000).toFixed(2) + "s)";
-            // 实时更新图表
-            if (event.data.timeSeriesData && document.getElementById('hpMpVisualizationToggle').checked) {
-                updateChartsRealtime(event.data.timeSeriesData);
+            if (event.data.timeSeriesDelta && document.getElementById('hpMpVisualizationToggle').checked) {
+                updateChartsRealtime(event.data.timeSeriesDelta);
             }
             break;
         case "simulation_error":
@@ -1425,38 +1424,64 @@ let combatCharts = {
 };
 
 let lastUpdateTime = 0;
-const UPDATE_INTERVAL = 1000; // 每秒更新一次图表
+const UPDATE_INTERVAL = 1000;
+let accumulatedTimeSeriesData = null;
 
-// 实时更新图表
-function updateChartsRealtime(timeSeriesData) {
-    // 节流：避免过于频繁的更新
+function resetAccumulatedTimeSeriesData() {
+    accumulatedTimeSeriesData = { timestamps: [], players: {} };
+}
+
+function appendTimeSeriesDelta(delta) {
+    if (!delta || !delta.timestamps || delta.timestamps.length === 0) return;
+
+    if (!accumulatedTimeSeriesData) {
+        resetAccumulatedTimeSeriesData();
+    }
+
+    const acc = accumulatedTimeSeriesData;
+    for (let i = 0; i < delta.timestamps.length; i++) {
+        acc.timestamps.push(delta.timestamps[i]);
+    }
+    for (const [playerId, playerData] of Object.entries(delta.players)) {
+        if (!acc.players[playerId]) {
+            acc.players[playerId] = { hp: [], mp: [], maxHp: [], maxMp: [] };
+        }
+        const p = acc.players[playerId];
+        for (let i = 0; i < playerData.hp.length; i++) {
+            p.hp.push(playerData.hp[i]);
+            p.mp.push(playerData.mp[i]);
+            p.maxHp.push(playerData.maxHp[i]);
+            p.maxMp.push(playerData.maxMp[i]);
+        }
+    }
+}
+
+function updateChartsRealtime(timeSeriesDelta) {
+    appendTimeSeriesDelta(timeSeriesDelta);
+
     const now = Date.now();
     if (now - lastUpdateTime < UPDATE_INTERVAL) {
         return;
     }
     lastUpdateTime = now;
-    
-    if (!timeSeriesData || !timeSeriesData.timestamps || timeSeriesData.timestamps.length === 0) {
+
+    if (!accumulatedTimeSeriesData || accumulatedTimeSeriesData.timestamps.length === 0) {
         return;
     }
-    
-    // 显示图表容器
+
     const container = document.getElementById('combatChartsContainer');
     if (container) {
         container.classList.remove('d-none');
     }
-    
-    // 如果图表不存在，先创建
+
     if (!combatCharts.hpChart || !combatCharts.mpChart) {
         initializeRealtimeCharts();
-        // 等待下一次更新周期再更新数据
         return;
     }
-    
-    const timeLabels = timeSeriesData.timestamps.map(t => (t / ONE_SECOND).toFixed(1));
-    const playerIds = Object.keys(timeSeriesData.players);
-    
-    // 生成颜色方案
+
+    const timeLabels = accumulatedTimeSeriesData.timestamps.map(t => (t / ONE_SECOND).toFixed(1));
+    const playerIds = Object.keys(accumulatedTimeSeriesData.players);
+
     const colors = [
         { border: 'rgb(75, 192, 192)', bg: 'rgba(75, 192, 192, 0.2)' },
         { border: 'rgb(255, 99, 132)', bg: 'rgba(255, 99, 132, 0.2)' },
@@ -1464,42 +1489,33 @@ function updateChartsRealtime(timeSeriesData) {
         { border: 'rgb(255, 206, 86)', bg: 'rgba(255, 206, 86, 0.2)' },
         { border: 'rgb(153, 102, 255)', bg: 'rgba(153, 102, 255, 0.2)' }
     ];
-    
-    // 重建datasets以确保完整更新
-    const hpDatasets = playerIds.map((playerId, index) => {
-        const playerData = timeSeriesData.players[playerId];
-        return {
-            label: playerId + ' HP',
-            data: playerData.hp,
-            borderColor: colors[index % colors.length].border,
-            backgroundColor: colors[index % colors.length].bg,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.1
-        };
-    });
-    
-    const mpDatasets = playerIds.map((playerId, index) => {
-        const playerData = timeSeriesData.players[playerId];
-        return {
-            label: playerId + ' MP',
-            data: playerData.mp,
-            borderColor: colors[index % colors.length].border,
-            backgroundColor: colors[index % colors.length].bg,
-            borderWidth: 2,
-            pointRadius: 0,
-            tension: 0.1
-        };
-    });
-    
-    // 更新HP图表
+
+    const hpDatasets = playerIds.map((playerId, index) => ({
+        label: playerId + ' HP',
+        data: accumulatedTimeSeriesData.players[playerId].hp,
+        borderColor: colors[index % colors.length].border,
+        backgroundColor: colors[index % colors.length].bg,
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.1
+    }));
+
+    const mpDatasets = playerIds.map((playerId, index) => ({
+        label: playerId + ' MP',
+        data: accumulatedTimeSeriesData.players[playerId].mp,
+        borderColor: colors[index % colors.length].border,
+        backgroundColor: colors[index % colors.length].bg,
+        borderWidth: 2,
+        pointRadius: 0,
+        tension: 0.1
+    }));
+
     combatCharts.hpChart.data.labels = timeLabels;
     combatCharts.hpChart.data.datasets = hpDatasets;
     combatCharts.hpChart.options.plugins.legend.display = true;
     combatCharts.hpChart.options.plugins.title.text = i18next.t('common:Experiment.hpOverTime');
     combatCharts.hpChart.update('none');
-    
-    // 更新MP图表
+
     combatCharts.mpChart.data.labels = timeLabels;
     combatCharts.mpChart.data.datasets = mpDatasets;
     combatCharts.mpChart.options.plugins.legend.display = true;
@@ -2601,27 +2617,21 @@ function showDamageDone(simResult, playerToDisplay) {
         const i = simResult.timeSpentAlive.findIndex(e => e.name === target);
         let aliveSecondsSimulated = simResult.timeSpentAlive[i].timeSpentAlive / ONE_SECOND;
 
-        for (const [ability, abilityCasts] of Object.entries(abilities)) {
-            let casts = Object.values(abilityCasts).reduce((prev, cur) => prev + cur, 0);
-            let misses = abilityCasts["miss"] ?? 0;
-            let damage = Object.entries(abilityCasts)
-                .filter((entry) => entry[0] != "miss")
-                .reduce((prev, cur) => prev + Number(cur[0]) * cur[1], 0);
-
+        for (const [ability, abilityStats] of Object.entries(abilities)) {
             targetDamageDone[ability] = {
-                casts,
-                misses,
-                damage,
+                casts: abilityStats.casts,
+                misses: abilityStats.misses,
+                damage: abilityStats.totalDamage,
             };
             if (totalDamageDone[ability]) {
-                totalDamageDone[ability].casts += casts;
-                totalDamageDone[ability].misses += misses;
-                totalDamageDone[ability].damage += damage;
+                totalDamageDone[ability].casts += abilityStats.casts;
+                totalDamageDone[ability].misses += abilityStats.misses;
+                totalDamageDone[ability].damage += abilityStats.totalDamage;
             } else {
                 totalDamageDone[ability] = {
-                    casts,
-                    misses,
-                    damage,
+                    casts: abilityStats.casts,
+                    misses: abilityStats.misses,
+                    damage: abilityStats.totalDamage,
                 };
             }
         }
@@ -2697,27 +2707,21 @@ function showDamageTaken(simResult, playerToDisplay) {
         let aliveSecondsSimulated = simResult.timeSpentAlive[i].timeSpentAlive / ONE_SECOND;
         let sourceDamageTaken = {};
         if (targets[playerToDisplay] && Object.keys(targets[playerToDisplay]).length > 0) {
-            for (const [ability, abilityCasts] of Object.entries(targets[playerToDisplay])) {
-                let casts = Object.values(abilityCasts).reduce((prev, cur) => prev + cur, 0);
-                let misses = abilityCasts["miss"] ?? 0;
-                let damage = Object.entries(abilityCasts)
-                    .filter((entry) => entry[0] != "miss")
-                    .reduce((prev, cur) => prev + Number(cur[0]) * cur[1], 0);
-
+            for (const [ability, abilityStats] of Object.entries(targets[playerToDisplay])) {
                 sourceDamageTaken[ability] = {
-                    casts,
-                    misses,
-                    damage,
+                    casts: abilityStats.casts,
+                    misses: abilityStats.misses,
+                    damage: abilityStats.totalDamage,
                 };
                 if (totalDamageTaken[ability]) {
-                    totalDamageTaken[ability].casts += casts;
-                    totalDamageTaken[ability].misses += misses;
-                    totalDamageTaken[ability].damage += damage;
+                    totalDamageTaken[ability].casts += abilityStats.casts;
+                    totalDamageTaken[ability].misses += abilityStats.misses;
+                    totalDamageTaken[ability].damage += abilityStats.totalDamage;
                 } else {
                     totalDamageTaken[ability] = {
-                        casts,
-                        misses,
-                        damage,
+                        casts: abilityStats.casts,
+                        misses: abilityStats.misses,
+                        damage: abilityStats.totalDamage,
                     };
                 }
             }
@@ -2819,18 +2823,13 @@ function showTeamDps(simResult) {
 
     // 遍历所有玩家的攻击数据
     for (const [sourceHrid, targets] of Object.entries(simResult.attacks)) {
-        // 只统计玩家的伤害 (player1, player2, etc.)
         if (!sourceHrid.startsWith('player')) {
             continue;
         }
 
         for (const [targetHrid, abilities] of Object.entries(targets)) {
-            for (const [ability, abilityCasts] of Object.entries(abilities)) {
-                // 计算该技能的总伤害
-                let damage = Object.entries(abilityCasts)
-                    .filter((entry) => entry[0] != "miss")
-                    .reduce((prev, cur) => prev + Number(cur[0]) * cur[1], 0);
-                totalTeamDamage += damage;
+            for (const [ability, abilityStats] of Object.entries(abilities)) {
+                totalTeamDamage += abilityStats.totalDamage;
             }
         }
     }
@@ -3000,24 +2999,28 @@ function initSimulationControls() {
     buttonStopSimulation.addEventListener("click", (event) => {
         progressbar.style.width = "0%";
         progressbar.innerHTML = "0%";
-        if (worker) {
-            worker.terminate();
-        }
-        worker = new Worker(new URL("worker.js", import.meta.url));
 
         if (multiWorker) {
+            try { multiWorker.postMessage({ type: "stop" }); } catch (_) {}
             multiWorker.terminate();
         }
         multiWorker = new Worker(new URL("multiWorker.js", import.meta.url));
 
         if (dungeonWorker) {
+            try { dungeonWorker.postMessage({ type: "stop" }); } catch (_) {}
             dungeonWorker.terminate();
             dungeonWorker = null;
         }
 
-        for (let worker of workerPool) {
-            worker.worker.terminate();
+        if (worker) {
+            worker.terminate();
         }
+        worker = new Worker(new URL("worker.js", import.meta.url));
+
+        for (const w of workerPool) {
+            w.worker.terminate();
+        }
+        workerPool = [];
 
         buttonStartSimulation.disabled = false;
         buttonStopSimulation.style.display = 'none';
@@ -3155,6 +3158,7 @@ function startSimulation(selectedPlayers) {
                 parallelCount: parallelCount
             };
             simStartTime = Date.now();
+            resetAccumulatedTimeSeriesData();
             if (!dungeonWorker) {
                 dungeonWorker = new Worker(new URL("dungeonWorker.js", import.meta.url));
             }
@@ -3177,6 +3181,7 @@ function startSimulation(selectedPlayers) {
             extra : extra
         };
         simStartTime = Date.now();
+        resetAccumulatedTimeSeriesData();
         if (!worker) {
             worker = new Worker(new URL("multiWorker.js", import.meta.url));
         }

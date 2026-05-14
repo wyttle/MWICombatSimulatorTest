@@ -212,6 +212,7 @@ class CombatSimulator extends EventTarget {
         this.reset();
 
         let ticks = 0;
+        let lastProgressTime = Date.now();
 
         let combatStartEvent = new CombatStartEvent(0);
         this.eventQueue.addEvent(combatStartEvent);
@@ -226,17 +227,21 @@ class CombatSimulator extends EventTarget {
                 if (this.enableHpMpVisualization) {
                     this.simResult.addTimeSeriesSnapshot(this.simulationTime, this.players);
                 }
-                let progressEvent = new CustomEvent("progress", {
-                    detail: {
-                        zone: this.zone?.hrid,
-                        difficultyTier: this.zone?.difficultyTier,
-                        labyrinth: this.labyrinth?.hrid,
-                        roomLevel: this.labyrinth?.roomLevel,
-                        progress: Math.min(this.simulationTime / simulationTimeLimit, 1),
-                        timeSeriesData: this.enableHpMpVisualization ? this.simResult.timeSeriesData : null
-                    },
-                });
-                this.dispatchEvent(progressEvent);
+                const now = Date.now();
+                if (now - lastProgressTime >= 200) {
+                    lastProgressTime = now;
+                    let progressEvent = new CustomEvent("progress", {
+                        detail: {
+                            zone: this.zone?.hrid,
+                            difficultyTier: this.zone?.difficultyTier,
+                            labyrinth: this.labyrinth?.hrid,
+                            roomLevel: this.labyrinth?.roomLevel,
+                            progress: Math.min(this.simulationTime / simulationTimeLimit, 1),
+                            timeSeriesDelta: this.enableHpMpVisualization ? this.simResult.getTimeSeriesDelta() : null
+                        },
+                    });
+                    this.dispatchEvent(progressEvent);
+                }
             }
         }
 
@@ -305,11 +310,11 @@ class CombatSimulator extends EventTarget {
 
         let ticks = 0;
         let lastReportedProgress = 0;
+        let lastProgressTime = Date.now();
 
         let combatStartEvent = new CombatStartEvent(0);
         this.eventQueue.addEvent(combatStartEvent);
 
-        // 模拟直到完成指定次数的地下城（成功+失败）
         while ((this.zone.dungeonsCompleted + this.zone.dungeonsFailed) < targetCount) {
             let nextEvent = this.eventQueue.getNextEvent();
             this.processEvent(nextEvent);
@@ -318,12 +323,13 @@ class CombatSimulator extends EventTarget {
             if (ticks == 1000) {
                 ticks = 0;
 
-                // 报告进度
                 if (progressCallback) {
                     const currentTotal = this.zone.dungeonsCompleted + this.zone.dungeonsFailed;
                     const progress = currentTotal / targetCount;
-                    if (progress > lastReportedProgress + 0.01) { // 每1%报告一次
+                    const now = Date.now();
+                    if (progress > lastReportedProgress + 0.01 && now - lastProgressTime >= 200) {
                         lastReportedProgress = progress;
+                        lastProgressTime = now;
                         progressCallback({
                             zone: this.zone.hrid,
                             difficultyTier: this.zone.difficultyTier,

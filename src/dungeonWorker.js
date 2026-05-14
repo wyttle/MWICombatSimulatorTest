@@ -25,7 +25,7 @@ function mergeSimResults(target, source) {
     // 合并 encounters
     target.encounters += source.encounters || 0;
 
-    // 合并 attacks (深度嵌套对象)
+    // 合并 attacks
     for (const [sourceHrid, targets] of Object.entries(source.attacks || {})) {
         if (!target.attacks[sourceHrid]) {
             target.attacks[sourceHrid] = {};
@@ -34,14 +34,14 @@ function mergeSimResults(target, source) {
             if (!target.attacks[sourceHrid][targetHrid]) {
                 target.attacks[sourceHrid][targetHrid] = {};
             }
-            for (const [ability, hits] of Object.entries(abilities)) {
+            for (const [ability, stats] of Object.entries(abilities)) {
                 if (!target.attacks[sourceHrid][targetHrid][ability]) {
-                    target.attacks[sourceHrid][targetHrid][ability] = {};
+                    target.attacks[sourceHrid][targetHrid][ability] = { casts: 0, misses: 0, totalDamage: 0 };
                 }
-                for (const [hit, count] of Object.entries(hits)) {
-                    target.attacks[sourceHrid][targetHrid][ability][hit] =
-                        (target.attacks[sourceHrid][targetHrid][ability][hit] || 0) + count;
-                }
+                const existing = target.attacks[sourceHrid][targetHrid][ability];
+                existing.casts += stats.casts;
+                existing.misses += stats.misses;
+                existing.totalDamage += stats.totalDamage;
             }
         }
     }
@@ -173,43 +173,51 @@ function mergeSimResults(target, source) {
     }
 }
 
+let activeChildWorkers = [];
+
 onmessage = async function (event) {
     switch (event.data.type) {
+        case "stop":
+            for (const w of activeChildWorkers) {
+                w.terminate();
+            }
+            activeChildWorkers = [];
+            break;
+
         case "start_dungeon_parallel":
             const {
                 players,
                 zone,
                 extra,
-                simulationCount,  // 总模拟次数
-                parallelCount     // 并行数量，默认使用 CPU 核心数
+                simulationCount,
+                parallelCount
             } = event.data;
 
             const maxWorkers = parallelCount || navigator.hardwareConcurrency || 4;
             console.log("Dungeon parallel simulation with " + maxWorkers + " workers for " + simulationCount + " runs");
 
-            // 计算每个 Worker 的模拟次数
             const baseCountPerWorker = Math.floor(simulationCount / maxWorkers);
             const remainder = simulationCount % maxWorkers;
+
+            activeChildWorkers = [];
 
             try {
                 const outer_worker = this;
                 const workerProgress = new Array(maxWorkers).fill(0);
                 const workerCounts = [];
 
-                // 分配每个 Worker 的任务数量
                 for (let i = 0; i < maxWorkers; i++) {
-                    // 前 remainder 个 Worker 多分配一次
                     workerCounts.push(baseCountPerWorker + (i < remainder ? 1 : 0));
                 }
 
-                // 创建并启动所有 Worker
                 const workerPromises = [];
 
                 for (let i = 0; i < maxWorkers; i++) {
-                    if (workerCounts[i] === 0) continue; // 跳过没有任务的 Worker
+                    if (workerCounts[i] === 0) continue;
 
                     const workerPromise = new Promise((resolve, reject) => {
                         const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
+                        activeChildWorkers.push(simulationWorker);
 
                         const workerMessage = {
                             type: "start_dungeon_by_count",
@@ -227,7 +235,6 @@ onmessage = async function (event) {
                                 resolve(workerEvent.data.simResult);
                             } else if (workerEvent.data.type === "simulation_progress") {
                                 workerProgress[i] = workerEvent.data.progress;
-                                // 计算加权总进度
                                 let totalProgress = 0;
                                 for (let j = 0; j < maxWorkers; j++) {
                                     totalProgress += workerProgress[j] * workerCounts[j];
@@ -254,16 +261,14 @@ onmessage = async function (event) {
                     workerPromises.push(workerPromise);
                 }
 
-                // 等待所有 Worker 完成
                 const allResults = await Promise.all(workerPromises);
+                activeChildWorkers = [];
 
-                // 合并所有结果（使用独立函数，因为 Worker 返回的是普通对象）
                 const mergedResult = allResults[0];
                 for (let i = 1; i < allResults.length; i++) {
                     mergeSimResults(mergedResult, allResults[i]);
                 }
 
-                // 发送合并后的结果
                 this.postMessage({
                     type: "simulation_result",
                     simResult: mergedResult
@@ -271,6 +276,10 @@ onmessage = async function (event) {
 
             } catch (e) {
                 console.error("Dungeon parallel simulation error:", e);
+                for (const w of activeChildWorkers) {
+                    w.terminate();
+                }
+                activeChildWorkers = [];
                 this.postMessage({
                     type: "simulation_error",
                     error: e.message || e

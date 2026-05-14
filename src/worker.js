@@ -138,7 +138,7 @@ onmessage = async function (event) {
                     difficultyTier: event.detail.difficultyTier,
                     labyrinth: event.detail.labyrinth,
                     roomLevel: event.detail.roomLevel,
-                    timeSeriesData: event.detail.timeSeriesData
+                    timeSeriesDelta: event.detail.timeSeriesDelta
                 });
             });
 

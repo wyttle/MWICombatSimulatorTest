@@ -1,9 +1,20 @@
 
+let activeChildWorkers = [];
+
 onmessage = async function (event) {
     switch (event.data.type) {
+        case "stop":
+            for (const w of activeChildWorkers) {
+                w.terminate();
+            }
+            activeChildWorkers = [];
+            break;
+
         case "start_simulation_all_zones":
             const zoneHrids = event.data.zones;
             let zoneProgress = Object.fromEntries(zoneHrids.map(zone => [zone.zoneHrid+'#'+zone.difficultyTier, 0]));
+
+            activeChildWorkers = [];
 
             try {
                 const maxWorkers = navigator.hardwareConcurrency;
@@ -15,15 +26,14 @@ onmessage = async function (event) {
                 const outer_worker = this;
                 let reportedProgress = 0;
 
-                // 创建工作线程池
                 const processTask = async (workerId) => {
                     while (taskQueue.length > 0) {
                         const zoneIndex = nextIndex++;
                         const currentZone = taskQueue.shift();
 
                         const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
+                        activeChildWorkers.push(simulationWorker);
 
-                        // Do simulation
                         let workerMessage = {
                             type: "start_simulation",
                             players: event.data.players,
@@ -56,17 +66,20 @@ onmessage = async function (event) {
                     }
                 };
 
-                // 启动工作线程
                 const workers = Array(Math.min(maxWorkers, zoneHrids.length))
                     .fill()
                     .map((_, index) => processTask(index));
 
-                // 等待所有任务完成
                 await Promise.all(workers);
+                activeChildWorkers = [];
 
                 this.postMessage({ type: "simulation_result_allZones", simResults: results });
             } catch (e) {
                 console.log(e);
+                for (const w of activeChildWorkers) {
+                    w.terminate();
+                }
+                activeChildWorkers = [];
                 this.postMessage({ type: "simulation_error", error: e });
             }
             break;
@@ -74,6 +87,8 @@ onmessage = async function (event) {
             const labyrinthHrids = event.data.labyrinths;
             let labyrinthProgress = Object.fromEntries(labyrinthHrids.map(labyrinth => [labyrinth.labyrinthHrid+'#'+labyrinth.roomLevel, 0]));
             
+            activeChildWorkers = [];
+
             try {
                 const maxWorkersLab = navigator.hardwareConcurrency;
                 console.log("maxWorkers: " + maxWorkersLab);
@@ -90,6 +105,7 @@ onmessage = async function (event) {
                         const currentLabyrinth = labTaskQueue.shift();
 
                         const simulationWorker = new Worker(new URL('worker.js', import.meta.url));
+                        activeChildWorkers.push(simulationWorker);
 
                         let workerMessage = {
                             type: "start_simulation",
@@ -128,10 +144,15 @@ onmessage = async function (event) {
                     .map((_, index) => processLabTask(index));
 
                 await Promise.all(labWorkers);
+                activeChildWorkers = [];
 
                 this.postMessage({ type: "simulation_result_allLabyrinths", simResults: labResults });
             } catch (e) {
                 console.log(e);
+                for (const w of activeChildWorkers) {
+                    w.terminate();
+                }
+                activeChildWorkers = [];
                 this.postMessage({ type: "simulation_error", error: e });
             }
             break;
