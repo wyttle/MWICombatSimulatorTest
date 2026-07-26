@@ -7,6 +7,9 @@
         "test": "echo \"Error: no test specified\" && exit 1",
         "build": "cross-env NODE_ENV=production webpack --mode production",
         "build:dev": "webpack --mode development",
+        "extract:guild-shrines": "node extractGuildShrineData.cjs",
+        "validate:guild-shrines": "node validateGuildShrines.cjs",
+        "validate:mwi-importer": "node validateMWIImporter.cjs",
         "watch": "webpack --watch",
         "start": "webpack serve --mode development --open"
     },
