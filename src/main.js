@@ -22,6 +22,7 @@ import patchNote from "../patchNote.json";
 
 const ONE_SECOND = 1e9;
 const ONE_HOUR = 60 * 60 * ONE_SECOND;
+const GUILD_SHRINE_IDS = ["force", "tempo", "spirit", "rarity", "scholar"];
 
 let buttonStartSimulation = document.getElementById("buttonStartSimulation");
 let buttonStopSimulation = document.getElementById("buttonStopSimulation");
@@ -2857,6 +2858,36 @@ function createElement(tagName, className, innerHTML = "", id = "") {
     return element;
 }
 
+function normalizeGuildShrineLevel(value) {
+    const level = Number.parseInt(value, 10);
+    return Number.isFinite(level) ? Math.min(20, Math.max(0, level)) : 0;
+}
+
+function collectGuildShrineLevels() {
+    return Object.fromEntries(GUILD_SHRINE_IDS.map((shrineId) => {
+        const input = document.getElementById("guildShrineLevel_" + shrineId);
+        const level = normalizeGuildShrineLevel(input?.value);
+        if (input) input.value = level;
+        return [shrineId, level];
+    }));
+}
+
+function setGuildShrineLevels(levels = {}) {
+    for (const shrineId of GUILD_SHRINE_IDS) {
+        const input = document.getElementById("guildShrineLevel_" + shrineId);
+        if (input) input.value = normalizeGuildShrineLevel(levels[shrineId]);
+    }
+}
+
+function initGuildShrinesSection() {
+    for (const input of document.querySelectorAll(".guild-shrine-level")) {
+        input.addEventListener("change", () => {
+            input.value = normalizeGuildShrineLevel(input.value);
+        });
+    }
+    setGuildShrineLevels();
+}
+
 // #endregion
 
 // #region Simulation Controls
@@ -3113,6 +3144,7 @@ function startSimulation(selectedPlayers) {
             }
         }
     }
+    const guildShrineLevels = collectGuildShrineLevels();
 
     let simAllZonesToggle = document.getElementById("simAllZoneToggle");
     let simAllSoloToggle = document.getElementById("simAllSoloToggle");
@@ -3155,6 +3187,7 @@ function startSimulation(selectedPlayers) {
                 zone: { zoneHrid: zoneHrid, difficultyTier: difficultyTier },
                 simulationCount: simulationCount,
                 extra: extra,
+                guildShrineLevels: guildShrineLevels,
                 parallelCount: parallelCount
             };
             simStartTime = Date.now();
@@ -3178,7 +3211,8 @@ function startSimulation(selectedPlayers) {
             zone: simZone,
             labyrinth: simLabyrinth,
             simulationTimeLimit: simulationTimeLimit,
-            extra : extra
+            extra : extra,
+            guildShrineLevels: guildShrineLevels
         };
         simStartTime = Date.now();
         resetAccumulatedTimeSeriesData();
@@ -3208,7 +3242,8 @@ function startSimulation(selectedPlayers) {
             players: playersToSim,
             labyrinths: simHrids,
             simulationTimeLimit: simulationTimeLimit,
-            extra: extra
+            extra: extra,
+            guildShrineLevels: guildShrineLevels
         };
         simStartTime = Date.now();
         if (!multiWorker) {
@@ -3258,7 +3293,8 @@ function startSimulation(selectedPlayers) {
             players: playersToSim,
             zones: simHrids,
             simulationTimeLimit: simulationTimeLimit,
-            extra: extra
+            extra: extra,
+            guildShrineLevels: guildShrineLevels
         };
         simStartTime = Date.now();
         if (!multiWorker) {
@@ -3333,6 +3369,7 @@ document.getElementById("buttonUploadJSONSimulate").addEventListener("click", (e
             }
         }
     }
+    const defaultGuildShrineLevels = collectGuildShrineLevels();
 
     let fileInput = document.getElementById("inputUploadJSONSimulation");
     let file = fileInput.files[0];
@@ -3386,18 +3423,20 @@ document.getElementById("buttonUploadJSONSimulate").addEventListener("click", (e
                 const simulationTimeLimit = (jsonData.simulationTimeLimit || 24) * ONE_HOUR;
                 const simName = jsonData.name || `Json ${key}`;
                 const zoneHrid = jsonData.zone;
+                const guildShrineLevels = Object.fromEntries(GUILD_SHRINE_IDS.map((shrineId) => [
+                    shrineId,
+                    normalizeGuildShrineLevel(jsonData.guildShrineLevels?.[shrineId] ?? defaultGuildShrineLevels[shrineId])
+                ]));
                 if (zoneHrid === "all") {
                     let targetHrids = {};
 
-                    if (simAllZonesToggle.checked) {
-                        Object.values(actionDetailMap)
-                            .filter(a =>
-                                a.type === "/action_types/combat" &&
-                                a.category !== "/action_categories/combat/dungeons" &&
-                                a.combatZoneInfo.fightInfo.randomSpawnInfo.maxSpawnCount > 1
-                            )
-                            .forEach(a => { targetHrids[a.hrid] = a; });
-                    }
+                    Object.values(actionDetailMap)
+                        .filter(a =>
+                            a.type === "/action_types/combat" &&
+                            a.category !== "/action_categories/combat/dungeons" &&
+                            a.combatZoneInfo.fightInfo.randomSpawnInfo.maxSpawnCount > 1
+                        )
+                        .forEach(a => { targetHrids[a.hrid] = a; });
 
                     let simHrids = Object.values(targetHrids)
                         .sort((a, b) => a.sortIndex - b.sortIndex)
@@ -3417,15 +3456,16 @@ document.getElementById("buttonUploadJSONSimulate").addEventListener("click", (e
                         players: playersToSim,
                         zones: simHrids,
                         simulationTimeLimit: simulationTimeLimit,
-                        extra : extra
+                        extra : extra,
+                        guildShrineLevels: guildShrineLevels
                     };
-                    const worker = new Worker(new URL("worker.js", import.meta.url)); 
-                    worker.onmessage = mainWorkerOnMessage;
-                    worker.postMessage(workerMessage);
+                    const simulationWorker = new Worker(new URL("multiWorker.js", import.meta.url));
+                    simulationWorker.onmessage = onMultiWorkerMessage;
+                    simulationWorker.postMessage(workerMessage);
                     customAlert("Simulation task Created", "info")
                     workerPool.push({
                         workerId: workerMessage.workerId,
-                        worker: worker,
+                        worker: simulationWorker,
                     });
                 } else {
                     let difficultyTier = jsonData.difficultyTier || 0;
@@ -3436,15 +3476,16 @@ document.getElementById("buttonUploadJSONSimulate").addEventListener("click", (e
                         players: playersToSim,
                         zone: { zoneHrid: zoneHrid, difficultyTier: difficultyTier },
                         simulationTimeLimit: simulationTimeLimit,
-                        extra : extra
+                        extra : extra,
+                        guildShrineLevels: guildShrineLevels
                     };
-                    const worker = new Worker(new URL("worker.js", import.meta.url)); 
-                    worker.onmessage = mainWorkerOnMessage;
-                    worker.postMessage(workerMessage);
+                    const simulationWorker = new Worker(new URL("worker.js", import.meta.url));
+                    simulationWorker.onmessage = onWorkerMessage;
+                    simulationWorker.postMessage(workerMessage);
                     customAlert("Simulation task Created", "info")
                     workerPool.push({
                         workerId: workerMessage.workerId,
-                        worker: worker,
+                        worker: simulationWorker,
                     });
                 }
             }
@@ -3839,6 +3880,7 @@ function getEquipmentSetFromUI() {
         triggerMap: {},
         houseRooms: {},
         achievements: {},
+        guildShrineLevels: {},
     };
 
     ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"].forEach((skill) => {
@@ -3879,6 +3921,7 @@ function getEquipmentSetFromUI() {
 
     equipmentSet.houseRooms = player.houseRooms;
     equipmentSet.achievements = player.achievements;
+    equipmentSet.guildShrineLevels = collectGuildShrineLevels();
 
     return equipmentSet;
 }
@@ -3906,6 +3949,7 @@ function fixTriggerMap(triggerMap) {
 }
 
 function loadEquipmentSetIntoUI(equipmentSet) {
+    setGuildShrineLevels(equipmentSet.guildShrineLevels);
     ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"].forEach((skill) => {
         let levelInput = document.getElementById("inputLevel_" + skill);
         if (skill == "melee" && !equipmentSet.levels["meleeLevel"] && equipmentSet.levels["powerLevel"]) {
@@ -4068,7 +4112,13 @@ function resetImportInputs() {
 
 function doGroupExport() {
     try {
-        navigator.clipboard.writeText(JSON.stringify(playerDataMap)).then(() => alert("Current Group has been copied to clipboard."));
+        const guildShrineLevels = collectGuildShrineLevels();
+        const groupState = Object.fromEntries(Object.entries(playerDataMap).map(([playerId, playerJson]) => {
+            const playerState = JSON.parse(playerJson);
+            playerState.guildShrineLevels = guildShrineLevels;
+            return [playerId, JSON.stringify(playerState)];
+        }));
+        navigator.clipboard.writeText(JSON.stringify(groupState)).then(() => alert("Current Group has been copied to clipboard."));
     } catch (err) {
         alert('Error copying to clipboard: ' + err);
     }
@@ -4120,7 +4170,8 @@ function doSoloExport() {
         zone: zoneSelect.value,
         simulationTime: simulationTimeInput.value,
         houseRooms: player.houseRooms,
-        achievements: player.achievements
+        achievements: player.achievements,
+        guildShrineLevels: collectGuildShrineLevels()
     };
     try {
         navigator.clipboard.writeText(JSON.stringify(state)).then(() => alert("Current set has been copied to clipboard."));
@@ -4145,13 +4196,35 @@ function doGroupImport() {
     let needUpdateCurrentTab = false;
     const value = document.getElementById("inputSetGroupCombatAll")?.value || "";
     if (!value.trim()) {
+        let importedGuildShrineLevels = null;
         for (let i of ['1', '2', '3', '4', '5']) {
             if (setPlayerData(i, "inputSetGroupCombatplayer" + i) && currentPlayerTabId == i) {
                 needUpdateCurrentTab = true;
             }
+            const playerImportValue = document.getElementById("inputSetGroupCombatplayer" + i)?.value.trim();
+            if (!importedGuildShrineLevels && playerImportValue) {
+                importedGuildShrineLevels = JSON.parse(playerImportValue).guildShrineLevels;
+            }
         }
+        setGuildShrineLevels(importedGuildShrineLevels);
     } else {
-        playerDataMap = JSON.parse(value);
+        const groupImport = JSON.parse(value);
+        if (groupImport.players) {
+            playerDataMap = groupImport.players;
+            setGuildShrineLevels(groupImport.guildShrineLevels);
+        } else {
+            playerDataMap = groupImport;
+            const firstPlayerState = Object.values(groupImport)
+                .map((playerJson) => {
+                    try {
+                        return JSON.parse(playerJson);
+                    } catch {
+                        return null;
+                    }
+                })
+                .find((playerState) => playerState?.guildShrineLevels);
+            setGuildShrineLevels(firstPlayerState?.guildShrineLevels);
+        }
         needUpdateCurrentTab = true;
     }
 
@@ -4163,6 +4236,7 @@ function doGroupImport() {
 function doSoloImport() {
     let importSet = document.getElementById("inputSetSolo").value;
     importSet = JSON.parse(importSet);
+    setGuildShrineLevels(importSet.guildShrineLevels);
     ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"].forEach((skill) => {
         let levelInput = document.getElementById("inputLevel_" + skill);
         if (skill == "melee" && !importSet.player["meleeLevel"] && importSet.player["powerLevel"]) {
@@ -4913,6 +4987,7 @@ initImportExportModal();
 initDamageDoneTaken();
 initPatchNotes();
 initExtraBuffSection();
+initGuildShrinesSection();
 initHpMpVisualization();
 
 updateState();
