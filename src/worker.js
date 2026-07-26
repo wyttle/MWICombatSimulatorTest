@@ -2,6 +2,7 @@ import CombatSimulator from "./combatsimulator/combatSimulator";
 import Player from "./combatsimulator/player";
 import Zone from "./combatsimulator/zone";
 import Labyrinth from "./combatsimulator/labyrinth";
+import { createGuildShrineBuffs } from "./combatsimulator/guildShrine";
 
 // 创建 extraBuffs 的辅助函数
 function createExtraBuffs(extra) {
@@ -110,6 +111,7 @@ onmessage = async function (event) {
     switch (event.data.type) {
         case "start_simulation": {
             let extraBuffs = createExtraBuffs(event.data.extra);
+            let guildShrineBuffs = createGuildShrineBuffs(event.data.guildShrineLevels);
 
             let playersData = event.data.players;
             let players = [];
@@ -125,6 +127,7 @@ onmessage = async function (event) {
                 let currentPlayer = Player.createFromDTO(structuredClone(playersData[i]));
                 currentPlayer.zoneBuffs = zone?.buffs || labyrinth?.buffs || [];
                 currentPlayer.extraBuffs = extraBuffs;
+                currentPlayer.guildShrineBuffs = guildShrineBuffs;
                 players.push(currentPlayer);
             }
             let simulationTimeLimit = event.data.simulationTimeLimit;
@@ -155,6 +158,7 @@ onmessage = async function (event) {
         case "start_dungeon_by_count": {
             // 按次数模拟地下城
             let extraBuffs = createExtraBuffs(event.data.extra);
+            let guildShrineBuffs = createGuildShrineBuffs(event.data.guildShrineLevels);
 
             let playersData = event.data.players;
             let players = [];
@@ -163,6 +167,7 @@ onmessage = async function (event) {
                 let currentPlayer = Player.createFromDTO(structuredClone(playersData[i]));
                 currentPlayer.zoneBuffs = zone.buffs;
                 currentPlayer.extraBuffs = extraBuffs;
+                currentPlayer.guildShrineBuffs = guildShrineBuffs;
                 players.push(currentPlayer);
             }
 

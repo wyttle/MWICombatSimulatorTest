@@ -152,8 +152,9 @@ class CombatUnit {
     };
     combatBuffs = {};
     permanentBuffs = {};
-    zoneBuffs = {};
-    extraBuffs = {};
+    zoneBuffs = [];
+    extraBuffs = [];
+    guildShrineBuffs = [];
 
     constructor() { }
 
@@ -195,13 +196,18 @@ class CombatUnit {
             }
         }
 
+        const maxHitpointsBoost = buffAggregates["/buff_types/max_hitpoints"] || { flatBoost: 0, ratioBoost: 0 };
+        const baseMaxHitpoints = 10 * (10 + this.combatDetails.staminaLevel) + this.combatDetails.combatStats.maxHitpoints;
         this.combatDetails.maxHitpoints = Math.floor(
-            (10 * (10 + this.combatDetails.staminaLevel) + this.combatDetails.combatStats.maxHitpoints)
-            * (1 + this.combatDetails.combatStats.maxHitpointsRatio)
+            (baseMaxHitpoints + maxHitpointsBoost.flatBoost)
+            * (1 + this.combatDetails.combatStats.maxHitpointsRatio + maxHitpointsBoost.ratioBoost)
         );
+
+        const maxManapointsBoost = buffAggregates["/buff_types/max_manapoints"] || { flatBoost: 0, ratioBoost: 0 };
+        const baseMaxManapoints = 10 * (10 + this.combatDetails.intelligenceLevel) + this.combatDetails.combatStats.maxManapoints;
         this.combatDetails.maxManapoints = Math.floor(
-            (10 * (10 + this.combatDetails.intelligenceLevel) + this.combatDetails.combatStats.maxManapoints)
-            * (1 + this.combatDetails.combatStats.maxManapointsRatio)
+            (baseMaxManapoints + maxManapointsBoost.flatBoost)
+            * (1 + this.combatDetails.combatStats.maxManapointsRatio + maxManapointsBoost.ratioBoost)
         );
 
         const accuracyRatioBoostFromFury = buffAggregates["/buff_types/fury_accuracy"]?.ratioBoost || 0;
@@ -431,6 +437,8 @@ class CombatUnit {
     }
 
     generatePermanentBuffs() {
+        this.permanentBuffs = {};
+
         for (let i = 0; i < this.houseRooms.length; i++) {
             const houseRoom = this.houseRooms[i];
             houseRoom.buffs.forEach(buff => {
@@ -450,6 +458,11 @@ class CombatUnit {
         }
         if (this.extraBuffs) {
             this.extraBuffs.forEach(buff => {
+                this.addPermanentBuff(buff);
+            });
+        }
+        if (this.guildShrineBuffs) {
+            this.guildShrineBuffs.forEach(buff => {
                 this.addPermanentBuff(buff);
             });
         }
