@@ -34,6 +34,9 @@ jobs:
       - name: Validate guild shrine data
         run: npm run validate:guild-shrines
 
+      - name: Validate MWI importer
+        run: npm run validate:mwi-importer
+
       - name: Build
         run: |
           export PUBLIC_PATH=/MWICombatSimulatorTest/
