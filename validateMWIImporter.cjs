@@ -95,7 +95,21 @@ assert.deepStrictEqual(
 
 assert.match(source, /@match\s+https:\/\/wyttle\.github\.io\/MWICombatSimulatorTest\/\*/);
 assert.match(source, /playerObj\.guildShrineLevels = getGuildShrineLevels\(\)/);
+assert.doesNotMatch(
+    source,
+    /function constructPlayerExportObjFromProfile\(profile\)[\s\S]*?playerObj\.guildShrineLevels = getGuildShrineLevels\(\)/,
+    "A teammate profile must not inherit the local character's Guild Shrine levels"
+);
+assert.match(
+    source,
+    /getGuildShrineLevelsFromSource\(profile\)/,
+    "A teammate should only receive Guild Shrine levels extracted from their own data"
+);
+assert.doesNotMatch(
+    source,
+    /exportObj\.guildShrineLevels = getGuildShrineLevels\(\)/,
+    "A party envelope must not make teammates inherit the local character's Guild Shrine levels"
+);
 assert.match(source, /equipmentSet\.guildShrineLevels = loadoutData\.guildShrineLevels \|\| getGuildShrineLevels\(\)/);
-assert.match(source, /exportObj\.guildShrineLevels = getGuildShrineLevels\(\)/);
 
 console.log("MWI Importer validation passed.");

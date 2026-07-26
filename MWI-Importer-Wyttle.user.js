@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer - Wyttle Guild Shrines
 // @namespace    http://tampermonkey.net/
-// @version      2.3.1
+// @version      2.3.2
 // @description  基于 MWI-Importer 2.3.0，增加 Wyttle 模拟器和公会神龛等级导入支持。
 // @match        https://www.milkywayidle.com/*
 // @match        https://test.milkywayidle.com/*
@@ -201,6 +201,40 @@
             }
         }
         return levels;
+    }
+
+    function getGuildShrineLevelsFromSource(source) {
+        if (!source || typeof source !== "object") {
+            return null;
+        }
+        const levels = emptyGuildShrineLevels();
+        const priorities = Object.fromEntries(GUILD_SHRINE_NAMES.map((name) => [name, 0]));
+        const visited = new Set();
+        const pending = [{ value: source, depth: 0 }];
+        let scanned = 0;
+        let found = false;
+
+        while (pending.length && scanned < 500) {
+            const { value, depth } = pending.pop();
+            if (!value || typeof value !== "object" || visited.has(value) || depth > 8) {
+                continue;
+            }
+            visited.add(value);
+            scanned += 1;
+
+            for (const field of GUILD_BUFF_CONTAINER_FIELDS) {
+                found = mergeGuildShrineContainer(value[field], levels, priorities, 1) || found;
+            }
+            for (const field of GUILD_SHRINE_CONTAINER_FIELDS) {
+                found = mergeGuildShrineContainer(value[field], levels, priorities, 2) || found;
+            }
+            for (const child of Object.values(value)) {
+                if (child && typeof child === "object") {
+                    pending.push({ value: child, depth: depth + 1 });
+                }
+            }
+        }
+        return found ? levels : null;
     }
 
     function handleMessage(message) {
@@ -674,7 +708,7 @@
         }
     }
 
-    function constructPlayerExportObjFromProfile(profile) {
+    function constructPlayerExportObjFromProfile(profile, battlePlayer = null) {
         let initData_abilityDetailMap = GM_getValue("initData_abilityDetailMap");
 
         const playerObj = {};
@@ -795,7 +829,10 @@
         for (const achievement of Object.values(profile.profile.characterAchievements)) {
             playerObj.achievements[achievement.achievementHrid] = achievement.isCompleted;
         }
-        playerObj.guildShrineLevels = getGuildShrineLevels();
+        const guildShrineLevels = getGuildShrineLevelsFromSource(battlePlayer) || getGuildShrineLevelsFromSource(profile);
+        if (guildShrineLevels) {
+            playerObj.guildShrineLevels = guildShrineLevels;
+        }
 
         return playerObj;
     }
@@ -1101,7 +1138,8 @@
                 }
                 let team_mate_obj = JSON.parse(GM_getValue(obj.players[player_num].character.name, ""));
                 console.log("team_mate_obj",team_mate_obj);
-                exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj);
+                const battlePlayer = obj.players[player_num];
+                exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj, battlePlayer);
             }
         }
         // Zone
@@ -1121,7 +1159,6 @@
         }
         // SimulationTime
         exportObj.simulationTime = SCRIPT_SIMULATE_TIME;
-        exportObj.guildShrineLevels = getGuildShrineLevels();
         return exportObj;
     }
 
