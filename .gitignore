@@ -5,3 +5,4 @@ tmpclaude-*
 dist/
 MWITOOLS/
 LOCAL_OPTIMIZATIONS.md
+initClientData.json
