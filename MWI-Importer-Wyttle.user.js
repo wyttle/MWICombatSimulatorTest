@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer - Wyttle Guild Shrines
 // @namespace    http://tampermonkey.net/
-// @version      2.3.3
+// @version      2.3.4
 // @description  基于 MWI-Importer 2.3.0，增加 Wyttle 模拟器和公会神龛等级导入支持。
 // @match        https://www.milkywayidle.com/*
 // @match        https://test.milkywayidle.com/*
@@ -1017,7 +1017,7 @@
             if (selectedElement) {
                 clearInterval(timer);
                 console.log("Mooneycalc-Importer: Found elem");
-                let profileArr = GM_getValue("profile_arr");
+                let profileArr = GM_getValue("profile_arr", []);
 
                 generateComboList(profileArr);
 
@@ -1134,6 +1134,7 @@
     }
 
     function generateComboList(profileArr) {
+        if (!Array.isArray(profileArr)) return;
         const container = document.getElementById("profile-combo-container");
         if (!container) return;
 

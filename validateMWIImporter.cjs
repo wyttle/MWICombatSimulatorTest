@@ -8,7 +8,7 @@ const importerPath = path.join(projectRoot, "MWI-Importer-Wyttle.user.js");
 const source = fs.readFileSync(importerPath, "utf8");
 const testableSource = source.replace(
     /\}\)\(\);\s*$/,
-    "globalThis.__mwiImporterTest = { getGuildShrineLevelsFromCombatBuffMap, getGuildShrineLevelsFromSource, constructImportJsonObj_team }; })();"
+    "globalThis.__mwiImporterTest = { getGuildShrineLevelsFromCombatBuffMap, getGuildShrineLevelsFromSource, constructImportJsonObj_team, generateComboList }; })();"
 );
 const storage = new Map();
 
@@ -142,6 +142,15 @@ assert.deepStrictEqual(
     { force: 0, tempo: 0, spirit: 0, rarity: 0, scholar: 0 },
     "An explicit empty combatBuffMap should mean that the player has no active Guild Shrine buffs"
 );
+assert.doesNotThrow(
+    () => context.__mwiImporterTest.generateComboList(undefined),
+    "A fresh userscript install without profile_arr must still initialize the importer UI"
+);
+assert.doesNotThrow(
+    () => context.__mwiImporterTest.generateComboList({ invalid: true }),
+    "Corrupt legacy profile_arr storage must not break importer UI initialization"
+);
+assert.match(source, /GM_getValue\("profile_arr", \[\]\)/);
 
 const selfProfile = {
     character: { id: 101, name: "Player One" },
