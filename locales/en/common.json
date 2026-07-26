@@ -8,6 +8,18 @@
     "equipment": {
         "presets": "Presets"
     },
+    "guildShrines": {
+        "title": "Guild Shrines",
+        "level": "Level",
+        "force": "Shrine of Force",
+        "tempo": "Shrine of Tempo",
+        "spirit": "Shrine of Spirit",
+        "rarity": "Shrine of Rarity",
+        "scholar": "Shrine of Scholar",
+        "disabled": "0 = Disabled",
+        "combatBuffs": "Combat Buffs",
+        "maxLevel": "Max Level 20"
+    },
     "player": "Player",
     "trigger": "Trigger",
     "getPrices": "Get Prices",

@@ -8,6 +8,18 @@
     "equipment": {
         "presets": "Presets"
     },
+    "guildShrines": {
+        "title": "公会神龛",
+        "level": "等级",
+        "force": "力量神龛",
+        "tempo": "迅捷神龛",
+        "spirit": "精神神龛",
+        "rarity": "稀有神龛",
+        "scholar": "学者神龛",
+        "disabled": "0 = 未启用",
+        "combatBuffs": "战斗增益",
+        "maxLevel": "最高等级 20"
+    },
     "player": "玩家",
     "trigger": "触发条件",
     "getPrices": "获取价格",

@@ -208,6 +208,12 @@
                                 House Rooms
                             </button>
                         </div>
+                        <div class="row mb-2">
+                            <button id="buttonGuildShrinesModal" class="btn btn-primary" type="button"
+                                data-bs-toggle="modal" data-bs-target="#guildShrinesModal" data-i18n="common:guildShrines.title">
+                                Guild Shrines
+                            </button>
+                        </div>
                         <!-- #endregion -->
                         <div class="row">
                             <b data-i18n="common:priceSettings.title">Price Settings</b>
@@ -1981,6 +1987,69 @@
                 <div class="modal-body">
                     <div class="container-fluid">
                         <div id="achievementsList"></div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-i18n="common:controls.close">Close</button>
+                </div>
+            </div>
+        </div>
+        <!-- #endregion -->
+    </div>
+    <div class="modal" id="guildShrinesModal" tabindex="-1">
+        <!-- #region Guild Shrines Modal -->
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" data-i18n="common:guildShrines.title">Guild Shrines</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="container-fluid" id="guildShrinesBox">
+                        <div class="mb-3 text-muted small">
+                            <span data-i18n="common:guildShrines.combatBuffs">Combat Buffs</span>
+                            <span aria-hidden="true"> · </span>
+                            <span data-i18n="common:guildShrines.disabled">0 = Disabled</span>
+                            <span aria-hidden="true"> · </span>
+                            <span data-i18n="common:guildShrines.maxLevel">Max Level 20</span>
+                        </div>
+                        <div class="row g-3">
+                            <div class="col-12">
+                                <label for="guildShrineLevel_force" class="form-label" data-i18n="common:guildShrines.force">Shrine of Force</label>
+                                <div class="input-group">
+                                    <input type="number" id="guildShrineLevel_force" class="form-control guild-shrine-level" value="0" min="0" max="20" step="1" required>
+                                    <span class="input-group-text" data-i18n="common:guildShrines.level">Level</span>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="guildShrineLevel_tempo" class="form-label" data-i18n="common:guildShrines.tempo">Shrine of Tempo</label>
+                                <div class="input-group">
+                                    <input type="number" id="guildShrineLevel_tempo" class="form-control guild-shrine-level" value="0" min="0" max="20" step="1" required>
+                                    <span class="input-group-text" data-i18n="common:guildShrines.level">Level</span>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="guildShrineLevel_spirit" class="form-label" data-i18n="common:guildShrines.spirit">Shrine of Spirit</label>
+                                <div class="input-group">
+                                    <input type="number" id="guildShrineLevel_spirit" class="form-control guild-shrine-level" value="0" min="0" max="20" step="1" required>
+                                    <span class="input-group-text" data-i18n="common:guildShrines.level">Level</span>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="guildShrineLevel_rarity" class="form-label" data-i18n="common:guildShrines.rarity">Shrine of Rarity</label>
+                                <div class="input-group">
+                                    <input type="number" id="guildShrineLevel_rarity" class="form-control guild-shrine-level" value="0" min="0" max="20" step="1" required>
+                                    <span class="input-group-text" data-i18n="common:guildShrines.level">Level</span>
+                                </div>
+                            </div>
+                            <div class="col-12">
+                                <label for="guildShrineLevel_scholar" class="form-label" data-i18n="common:guildShrines.scholar">Shrine of Scholar</label>
+                                <div class="input-group">
+                                    <input type="number" id="guildShrineLevel_scholar" class="form-control guild-shrine-level" value="0" min="0" max="20" step="1" required>
+                                    <span class="input-group-text" data-i18n="common:guildShrines.level">Level</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 <div class="modal-footer">
