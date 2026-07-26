@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI-Importer - Wyttle Guild Shrines
 // @namespace    http://tampermonkey.net/
-// @version      2.3.2
+// @version      2.3.3
 // @description  基于 MWI-Importer 2.3.0，增加 Wyttle 模拟器和公会神龛等级导入支持。
 // @match        https://www.milkywayidle.com/*
 // @match        https://test.milkywayidle.com/*
@@ -48,6 +48,25 @@
         "guildBuffLevelMap", "guildBuffLevelDict", "guildBuffLevels",
         "guildBuffMap", "guildBuffDict",
     ];
+    const GUILD_SHRINE_COMBAT_BUFFS = {
+        force: [
+            { uniqueHrid: "/buff_uniques/damage_guild_buff", valueField: "ratioBoost", perLevel: 0.003 },
+        ],
+        tempo: [
+            { uniqueHrid: "/buff_uniques/attack_speed_guild_buff", valueField: "ratioBoost", perLevel: 0.004 },
+            { uniqueHrid: "/buff_uniques/cast_speed_guild_buff", valueField: "flatBoost", perLevel: 0.004 },
+        ],
+        spirit: [
+            { uniqueHrid: "/buff_uniques/max_hitpoints_guild_buff", valueField: "ratioBoost", perLevel: 0.01 },
+            { uniqueHrid: "/buff_uniques/max_manapoints_guild_buff", valueField: "ratioBoost", perLevel: 0.01 },
+        ],
+        rarity: [
+            { uniqueHrid: "/buff_uniques/rare_find_guild_buff", valueField: "flatBoost", perLevel: 0.01 },
+        ],
+        scholar: [
+            { uniqueHrid: "/buff_uniques/wisdom_guild_buff", valueField: "flatBoost", perLevel: 0.005 },
+        ],
+    };
     //启动前先把所有队友的装备手动看一遍!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
     if (document.URL.includes("milkywayidle.com") || document.URL.includes("milkywayidlecn.com")) {
@@ -207,6 +226,10 @@
         if (!source || typeof source !== "object") {
             return null;
         }
+        const combatBuffLevels = getGuildShrineLevelsFromCombatBuffMap(source.combatBuffMap);
+        if (combatBuffLevels) {
+            return combatBuffLevels;
+        }
         const levels = emptyGuildShrineLevels();
         const priorities = Object.fromEntries(GUILD_SHRINE_NAMES.map((name) => [name, 0]));
         const visited = new Set();
@@ -235,6 +258,31 @@
             }
         }
         return found ? levels : null;
+    }
+
+    function getGuildShrineLevelsFromCombatBuffMap(combatBuffMap) {
+        if (!combatBuffMap || typeof combatBuffMap !== "object" || Array.isArray(combatBuffMap)) {
+            return null;
+        }
+        const levels = emptyGuildShrineLevels();
+        for (const shrineName of GUILD_SHRINE_NAMES) {
+            const inferredLevels = [];
+            for (const definition of GUILD_SHRINE_COMBAT_BUFFS[shrineName]) {
+                const buff = combatBuffMap[definition.uniqueHrid];
+                if (!buff || typeof buff !== "object") {
+                    continue;
+                }
+                const boost = Number(buff[definition.valueField]);
+                if (!Number.isFinite(boost) || boost < 0) {
+                    continue;
+                }
+                inferredLevels.push(Math.round(boost / definition.perLevel));
+            }
+            if (inferredLevels.length > 0) {
+                levels[shrineName] = normalizeGuildShrineLevel(Math.max(...inferredLevels)) ?? 0;
+            }
+        }
+        return levels;
     }
 
     function handleMessage(message) {
@@ -286,6 +334,9 @@
         }else if (obj && obj.type === "profile_shared"){
             console.log("profile_shared",obj);
             GM_setValue(obj.profile.sharableCharacter.name, message);
+            if (obj.profile.sharableCharacter.id !== undefined) {
+                GM_setValue("profile_character_" + obj.profile.sharableCharacter.id, message);
+            }
             get_sim_json(obj);
         }
         return message;
@@ -483,7 +534,7 @@
         localStorage.setItem("equipmentSets", JSON.stringify(equipmentSets));
     }
 
-    function constructSelfPlayerExportObjFromInitCharacterData() {
+    function constructSelfPlayerExportObjFromInitCharacterData(battlePlayer = null) {
         let data = GM_getValue("init_character_data");
         let obj = JSON.parse(data);
 
@@ -607,7 +658,7 @@
         for (const achievement of Object.values(obj.characterAchievements)) {
             playerObj.achievements[achievement.achievementHrid] = achievement.isCompleted;
         }
-        playerObj.guildShrineLevels = getGuildShrineLevels();
+        playerObj.guildShrineLevels = getGuildShrineLevelsFromSource(battlePlayer) || getGuildShrineLevels();
 
         return playerObj;
     }
@@ -1125,18 +1176,19 @@
             // HouseRooms
             exportObj.players[player_num].player.equipment = [];
             exportObj.players[player_num].houseRooms = {};
-            if(obj.players[player_num].character.name==init_character_obj.character.name){
-                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(init_character_obj);
+            if(obj.players[player_num].character.id==init_character_obj.character.id){
+                exportObj.players[player_num] = constructSelfPlayerExportObjFromInitCharacterData(obj.players[player_num]);
             }else{
                 //手动取装备数据
-                let team_mate_str=GM_getValue(obj.players[player_num].character.name, "")
+                const characterID = obj.players[player_num].character.id;
+                let team_mate_str = GM_getValue("profile_character_" + characterID, "") || GM_getValue(obj.players[player_num].character.name, "");
                 console.log("team_mate_str",team_mate_str);
                 if (!team_mate_str) {
                     alert("请手动查看一下队友装备信息，当前缺失装备信息队友："+obj.players[player_num].character.name);
                     //    console.log( "不敢模拟点击，请手动查看一下队友装备信息，当前缺失装备信息队友："+obj.players[player_num].character.name);
                     return;
                 }
-                let team_mate_obj = JSON.parse(GM_getValue(obj.players[player_num].character.name, ""));
+                let team_mate_obj = JSON.parse(team_mate_str);
                 console.log("team_mate_obj",team_mate_obj);
                 const battlePlayer = obj.players[player_num];
                 exportObj.players[player_num] = constructPlayerExportObjFromProfile(team_mate_obj, battlePlayer);
