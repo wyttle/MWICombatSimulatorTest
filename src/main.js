@@ -3097,6 +3097,7 @@ function startSimulation(selectedPlayers) {
                 }
             }
 
+            player.guildShrineLevels = collectGuildShrineLevels();
             playersToSim.push(structuredClone(player));
         }
     }
@@ -3314,6 +3315,9 @@ function parsePlayerJson(playerJson, hrid) {
         ...playerJson.player,
         houseRooms: playerJson.houseRooms,
     };
+    if (Object.hasOwn(playerJson, "guildShrineLevels")) {
+        playerData.guildShrineLevels = playerJson.guildShrineLevels;
+    }
     playerData.equipment = {};
     const triggerMap = playerJson.triggerMap;
     ["head", "body", "legs", "feet", "hands", "off_hand", "pouch", "neck", "earrings", "ring", "back", "main_hand", "two_hand", "charm"].forEach((type) => {
@@ -4112,13 +4116,7 @@ function resetImportInputs() {
 
 function doGroupExport() {
     try {
-        const guildShrineLevels = collectGuildShrineLevels();
-        const groupState = Object.fromEntries(Object.entries(playerDataMap).map(([playerId, playerJson]) => {
-            const playerState = JSON.parse(playerJson);
-            playerState.guildShrineLevels = guildShrineLevels;
-            return [playerId, JSON.stringify(playerState)];
-        }));
-        navigator.clipboard.writeText(JSON.stringify(groupState)).then(() => alert("Current Group has been copied to clipboard."));
+        navigator.clipboard.writeText(JSON.stringify(playerDataMap)).then(() => alert("Current Group has been copied to clipboard."));
     } catch (err) {
         alert('Error copying to clipboard: ' + err);
     }
@@ -4423,7 +4421,8 @@ function savePreviousPlayer(playerId) {
         zone: zoneSelect.value,
         simulationTime: simulationTimeInput.value,
         houseRooms: player.houseRooms,
-        achievements: player.achievements
+        achievements: player.achievements,
+        guildShrineLevels: collectGuildShrineLevels()
     };
     try {
         playerDataMap[playerId] = JSON.stringify(state);
@@ -4435,6 +4434,7 @@ function savePreviousPlayer(playerId) {
 function updateNextPlayer(currentPlayerNumber) {
     let playerImportData = playerDataMap[currentPlayerNumber];
     let importSet = JSON.parse(playerImportData);
+    setGuildShrineLevels(importSet.guildShrineLevels);
     ["stamina", "intelligence", "attack", "melee", "defense", "ranged", "magic"].forEach((skill) => {
         let levelInput = document.getElementById("inputLevel_" + skill);
         if (skill == "melee" && !importSet.player["meleeLevel"] && importSet.player["powerLevel"]) {

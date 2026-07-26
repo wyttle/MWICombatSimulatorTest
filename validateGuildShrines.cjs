@@ -6,6 +6,8 @@ const projectRoot = __dirname;
 const shrineMap = require(path.join(projectRoot, "src", "combatsimulator", "data", "guildShrineDetailMap.json"));
 const buffMap = require(path.join(projectRoot, "src", "combatsimulator", "data", "guildBuffDetailMap.json"));
 const mainSource = fs.readFileSync(path.join(projectRoot, "src", "main.js"), "utf8");
+const workerSource = fs.readFileSync(path.join(projectRoot, "src", "worker.js"), "utf8");
+const playerSource = fs.readFileSync(path.join(projectRoot, "src", "combatsimulator", "player.js"), "utf8");
 
 async function loadGuildShrineModule() {
     const modulePath = path.join(projectRoot, "src", "combatsimulator", "guildShrine.js");
@@ -56,6 +58,41 @@ assert.doesNotMatch(
 assert.match(
     mainSource,
     /Object\.values\(groupImport\)[\s\S]{0,500}guildShrineLevels/
+);
+assert.match(
+    workerSource,
+    /playersData\.some\(\(playerData\) => Object\.hasOwn\(playerData, "guildShrineLevels"\)\)[\s\S]{0,700}createGuildShrineBuffs\(playersData\[i\]\.guildShrineLevels \?\? legacyGuildShrineLevels\)/,
+    "Each simulated player must use their own Guild Shrine levels with legacy fallback"
+);
+assert.doesNotMatch(
+    mainSource,
+    /playerState\.guildShrineLevels = guildShrineLevels/,
+    "Group export must not overwrite every player's Guild Shrine levels"
+);
+assert.match(
+    mainSource,
+    /guildShrineLevels: collectGuildShrineLevels\(\)/,
+    "Saving the active player must persist that player's Guild Shrine levels"
+);
+assert.match(
+    mainSource,
+    /setGuildShrineLevels\(importSet\.guildShrineLevels\)/,
+    "Switching players must restore that player's Guild Shrine levels"
+);
+assert.match(
+    mainSource,
+    /player\.guildShrineLevels = collectGuildShrineLevels\(\);[\s\S]{0,100}playersToSim\.push\(structuredClone\(player\)\)/,
+    "Interactive simulations must attach the active player's Guild Shrine levels before cloning"
+);
+assert.match(
+    mainSource,
+    /if \(Object\.hasOwn\(playerJson, "guildShrineLevels"\)\) \{[\s\S]{0,120}playerData\.guildShrineLevels = playerJson\.guildShrineLevels/,
+    "Parsing must preserve the distinction between absent legacy fields and present per-player fields"
+);
+assert.match(
+    playerSource,
+    /if \(Object\.hasOwn\(dto, "guildShrineLevels"\)\) \{[\s\S]{0,120}player\.guildShrineLevels = dto\.guildShrineLevels/,
+    "Player DTO conversion must preserve per-player Guild Shrine levels"
 );
 
 const spirit = combatBuffs.find((detail) => detail.shrineHrid === "/guild_shrines/spirit");

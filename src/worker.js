@@ -111,10 +111,12 @@ onmessage = async function (event) {
     switch (event.data.type) {
         case "start_simulation": {
             let extraBuffs = createExtraBuffs(event.data.extra);
-            let guildShrineBuffs = createGuildShrineBuffs(event.data.guildShrineLevels);
 
             let playersData = event.data.players;
             let players = [];
+            const legacyGuildShrineLevels = playersData.some((playerData) => Object.hasOwn(playerData, "guildShrineLevels"))
+                ? undefined
+                : event.data.guildShrineLevels;
             let zone = null;
             if (event.data.zone) {
                 zone = new Zone(event.data.zone.zoneHrid, event.data.zone.difficultyTier);
@@ -127,7 +129,7 @@ onmessage = async function (event) {
                 let currentPlayer = Player.createFromDTO(structuredClone(playersData[i]));
                 currentPlayer.zoneBuffs = zone?.buffs || labyrinth?.buffs || [];
                 currentPlayer.extraBuffs = extraBuffs;
-                currentPlayer.guildShrineBuffs = guildShrineBuffs;
+                currentPlayer.guildShrineBuffs = createGuildShrineBuffs(playersData[i].guildShrineLevels ?? legacyGuildShrineLevels);
                 players.push(currentPlayer);
             }
             let simulationTimeLimit = event.data.simulationTimeLimit;
@@ -158,16 +160,18 @@ onmessage = async function (event) {
         case "start_dungeon_by_count": {
             // 按次数模拟地下城
             let extraBuffs = createExtraBuffs(event.data.extra);
-            let guildShrineBuffs = createGuildShrineBuffs(event.data.guildShrineLevels);
 
             let playersData = event.data.players;
             let players = [];
+            const legacyGuildShrineLevels = playersData.some((playerData) => Object.hasOwn(playerData, "guildShrineLevels"))
+                ? undefined
+                : event.data.guildShrineLevels;
             let zone = new Zone(event.data.zone.zoneHrid, event.data.zone.difficultyTier);
             for (let i = 0; i < playersData.length; i++) {
                 let currentPlayer = Player.createFromDTO(structuredClone(playersData[i]));
                 currentPlayer.zoneBuffs = zone.buffs;
                 currentPlayer.extraBuffs = extraBuffs;
-                currentPlayer.guildShrineBuffs = guildShrineBuffs;
+                currentPlayer.guildShrineBuffs = createGuildShrineBuffs(playersData[i].guildShrineLevels ?? legacyGuildShrineLevels);
                 players.push(currentPlayer);
             }
 

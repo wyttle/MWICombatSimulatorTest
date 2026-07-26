@@ -55,6 +55,9 @@ class Player extends CombatUnit {
         player.achievements = new Achievement(dto.achievements);
 
         player.debuffOnLevelGap = dto.debuffOnLevelGap;
+        if (Object.hasOwn(dto, "guildShrineLevels")) {
+            player.guildShrineLevels = dto.guildShrineLevels;
+        }
 
         return player;
     }
