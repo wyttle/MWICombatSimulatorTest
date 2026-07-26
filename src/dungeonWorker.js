@@ -189,6 +189,7 @@ onmessage = async function (event) {
                 players,
                 zone,
                 extra,
+                guildShrineLevels,
                 simulationCount,
                 parallelCount
             } = event.data;
@@ -224,6 +225,7 @@ onmessage = async function (event) {
                             players: players,
                             zone: zone,
                             extra: { ...extra, enableHpMpVisualization: false },
+                            guildShrineLevels: guildShrineLevels,
                             targetCount: workerCounts[i]
                         };
 

@@ -39,6 +39,7 @@ onmessage = async function (event) {
                             players: event.data.players,
                             zone: currentZone,
                             extra: event.data.extra,
+                            guildShrineLevels: event.data.guildShrineLevels,
                             simulationTimeLimit: event.data.simulationTimeLimit,
                         };
                         simulationWorker.postMessage(workerMessage);
@@ -112,6 +113,7 @@ onmessage = async function (event) {
                             players: event.data.players,
                             labyrinth: currentLabyrinth,
                             extra: event.data.extra,
+                            guildShrineLevels: event.data.guildShrineLevels,
                             simulationTimeLimit: event.data.simulationTimeLimit,
                         };
                         simulationWorker.postMessage(workerMessage);
