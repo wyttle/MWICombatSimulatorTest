@@ -38,6 +38,9 @@ class SimResult {
         this.maxEnrageStack = 0;
         this.minDungenonTime = 0;
         this.maxDungenonTime = 0;
+        this.dungeonCompletionTimeCount = 0;
+        this.dungeonCompletionTimeMean = 0;
+        this.dungeonCompletionTimeM2 = 0;
         this.labyAttemptCount = 0;
         this.lastDungeonFinishTime = 0;
         this.lastEncounterFinishTime = 0;
@@ -96,6 +99,12 @@ class SimResult {
         }
 
         const currentDungenonTime = finishTime - this.timeSpentAlive[i].spawnedAt;
+
+        this.dungeonCompletionTimeCount += 1;
+        const delta = currentDungenonTime - this.dungeonCompletionTimeMean;
+        this.dungeonCompletionTimeMean += delta / this.dungeonCompletionTimeCount;
+        const deltaFromUpdatedMean = currentDungenonTime - this.dungeonCompletionTimeMean;
+        this.dungeonCompletionTimeM2 += delta * deltaFromUpdatedMean;
 
         if (this.minDungenonTime == 0 || this.minDungenonTime > currentDungenonTime) {
             this.minDungenonTime = currentDungenonTime;
@@ -450,6 +459,18 @@ class SimResult {
 
         // 合并 maxDungenonTime (取最大值)
         this.maxDungenonTime = Math.max(this.maxDungenonTime, other.maxDungenonTime || 0);
+
+        // 合并 Welford 在线统计量，避免纳秒平方和的大数消减误差
+        const otherCompletionCount = other.dungeonCompletionTimeCount || 0;
+        if (otherCompletionCount > 0) {
+            const currentCompletionCount = this.dungeonCompletionTimeCount;
+            const combinedCompletionCount = currentCompletionCount + otherCompletionCount;
+            const meanDelta = other.dungeonCompletionTimeMean - this.dungeonCompletionTimeMean;
+            this.dungeonCompletionTimeMean += meanDelta * otherCompletionCount / combinedCompletionCount;
+            this.dungeonCompletionTimeM2 += (other.dungeonCompletionTimeM2 || 0)
+                + meanDelta * meanDelta * currentCompletionCount * otherCompletionCount / combinedCompletionCount;
+            this.dungeonCompletionTimeCount = combinedCompletionCount;
+        }
 
         // 合并 labyAttemptCount
         this.labyAttemptCount = (this.labyAttemptCount || 0) + (other.labyAttemptCount || 0);
