@@ -549,6 +549,31 @@ class CombatSimulator extends EventTarget {
         }
     }
 
+    scheduleNextPlayerAutoAttack(source) {
+        if (
+            !this.zone?.isDungeon ||
+            !source?.isPlayer ||
+            source.combatDetails.currentHitpoints <= 0 ||
+            this.allPlayersDead ||
+            source.isStunned ||
+            source.isBlinded
+        ) {
+            return;
+        }
+
+        if (
+            this.eventQueue.hasEventOfTypeAndSource(AbilityCastEndEvent.type, source) ||
+            this.eventQueue.hasEventOfTypeAndSource(AutoAttackEvent.type, source)
+        ) {
+            return;
+        }
+
+        this.eventQueue.addEvent(new AutoAttackEvent(
+            this.simulationTime + source.combatDetails.combatStats.attackInterval,
+            source
+        ));
+    }
+
     checkParry(targets) {
         let parryUnits = targets.filter((unit) => unit && unit.combatDetails.currentHitpoints > 0 && unit.combatDetails.combatStats.parry > 0);
         if (parryUnits.length <= 0) {
@@ -568,6 +593,7 @@ class CombatSimulator extends EventTarget {
         let targets = event.source.isPlayer ? this.enemies : this.players;
 
         if (!targets) {
+            this.scheduleNextPlayerAutoAttack(event.source);
             return;
         }
 
@@ -757,7 +783,9 @@ class CombatSimulator extends EventTarget {
             }
         }
 
-        if (!this.checkEncounterEnd()) {
+        if (this.checkEncounterEnd()) {
+            this.scheduleNextPlayerAutoAttack(event.source);
+        } else {
             // console.log("!EncounterEnd " + (this.simulationTime / 1000000000));
             this.addNextAttackEvent(event.source);
         }
@@ -781,7 +809,13 @@ class CombatSimulator extends EventTarget {
         let encounterEnded = false;
 
         if (this.enemies && !this.enemies.some((enemy) => enemy.combatDetails.currentHitpoints > 0)) {
-            this.eventQueue.clearEventsOfType(AutoAttackEvent.type);
+            if (this.zone?.isDungeon) {
+                this.eventQueue.clearMatching((queuedEvent) =>
+                    queuedEvent.type === AutoAttackEvent.type && queuedEvent.source?.isPlayer === false
+                );
+            } else {
+                this.eventQueue.clearEventsOfType(AutoAttackEvent.type);
+            }
             // this.eventQueue.clearEventsOfType(AbilityCastEndEvent.type);
             let enemyRespawnEvent = new EnemyRespawnEvent(this.simulationTime + ENEMY_RESPAWN_INTERVAL);
             this.eventQueue.addEvent(enemyRespawnEvent);
@@ -846,6 +880,7 @@ class CombatSimulator extends EventTarget {
                     this.eventQueue.clearEventsOfType(BlindExpirationEvent.type);
                     this.eventQueue.clearEventsOfType(SilenceExpirationEvent.type);
                     this.eventQueue.clearEventsOfType(AwaitCooldownEvent.type);
+                    this.eventQueue.clearEventsOfType(EnemyRespawnEvent.type);
                     this.enemies = null;
 
                     let combatStartEvent = new CombatStartEvent(this.simulationTime + RESTART_INTERVAL);
