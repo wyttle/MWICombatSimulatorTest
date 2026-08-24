@@ -1,6 +1,9 @@
 // 地下城并行模拟 Worker
 // 将地下城模拟任务按次数分配到多个 Worker 并行执行
 
+const MAX_DUNGEON_SIMULATIONS = 10000;
+const MAX_PARALLEL_WORKERS = 32;
+
 // 独立的合并函数，用于合并从 Worker 返回的普通对象（非 SimResult 实例）
 // 因为 Web Worker 的 postMessage 会将对象序列化为 JSON，丢失类方法
 function mergeSimResults(target, source) {
@@ -119,6 +122,24 @@ function mergeSimResults(target, source) {
         }
     }
 
+    // 合并 maxDungenonTime (取最大值)
+    target.maxDungenonTime = Math.max(target.maxDungenonTime || 0, source.maxDungenonTime || 0);
+
+    // 合并 Welford 在线统计量，避免纳秒平方和的大数消减误差
+    const sourceCompletionCount = source.dungeonCompletionTimeCount || 0;
+    if (sourceCompletionCount > 0) {
+        const targetCompletionCount = target.dungeonCompletionTimeCount || 0;
+        const combinedCompletionCount = targetCompletionCount + sourceCompletionCount;
+        const targetCompletionMean = target.dungeonCompletionTimeMean || 0;
+        const meanDelta = source.dungeonCompletionTimeMean - targetCompletionMean;
+        target.dungeonCompletionTimeMean = targetCompletionMean
+            + meanDelta * sourceCompletionCount / combinedCompletionCount;
+        target.dungeonCompletionTimeM2 = (target.dungeonCompletionTimeM2 || 0)
+            + (source.dungeonCompletionTimeM2 || 0)
+            + meanDelta * meanDelta * targetCompletionCount * sourceCompletionCount / combinedCompletionCount;
+        target.dungeonCompletionTimeCount = combinedCompletionCount;
+    }
+
     // 合并 lastDungeonFinishTime (累加，因为多worker按次数模拟时各自有独立时间轴)
     target.lastDungeonFinishTime = (target.lastDungeonFinishTime || 0) + (source.lastDungeonFinishTime || 0);
 
@@ -194,7 +215,16 @@ onmessage = async function (event) {
                 parallelCount
             } = event.data;
 
-            const maxWorkers = parallelCount || navigator.hardwareConcurrency || 4;
+            if (!Number.isInteger(simulationCount) || simulationCount < 1 || simulationCount > MAX_DUNGEON_SIMULATIONS) {
+                this.postMessage({
+                    type: "simulation_error",
+                    error: "Dungeon simulation count must be an integer between 1 and " + MAX_DUNGEON_SIMULATIONS
+                });
+                break;
+            }
+
+            const requestedWorkers = Number.isInteger(parallelCount) ? parallelCount : navigator.hardwareConcurrency || 4;
+            const maxWorkers = Math.min(MAX_PARALLEL_WORKERS, Math.max(1, requestedWorkers));
             console.log("Dungeon parallel simulation with " + maxWorkers + " workers for " + simulationCount + " runs");
 
             const baseCountPerWorker = Math.floor(simulationCount / maxWorkers);

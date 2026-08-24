@@ -22,7 +22,20 @@ import patchNote from "../patchNote.json";
 
 const ONE_SECOND = 1e9;
 const ONE_HOUR = 60 * 60 * ONE_SECOND;
+const MAX_DUNGEON_SIMULATIONS = 10000;
+const MAX_PARALLEL_WORKERS = 32;
 const GUILD_SHRINE_IDS = ["force", "tempo", "spirit", "rarity", "scholar"];
+
+function formatMinutesAndSeconds(durationNanoseconds) {
+    const totalSeconds = Math.round(durationNanoseconds / ONE_SECOND);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    const language = localStorage.getItem("i18nextLng") || navigator.language || "en";
+
+    return language.startsWith("zh")
+        ? minutes + "分" + seconds + "秒"
+        : minutes + "m " + seconds + "s";
+}
 
 let buttonStartSimulation = document.getElementById("buttonStartSimulation");
 let buttonStopSimulation = document.getElementById("buttonStopSimulation");
@@ -2109,26 +2122,18 @@ function showKills(simResult, playerToDisplay) {
             failedDungeonsRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.dungeonsFailed");
             newChildren.push(failedDungeonsRow);
         }
-        // 使用最后一轮完成时间来计算平均时间，避免未完成轮次的时间被计入
-        let dungeonHoursSimulated = simResult.lastDungeonFinishTime > 0 
-            ? simResult.lastDungeonFinishTime / ONE_HOUR 
-            : hoursSimulated;
-        encountersPerHour = (simResult.dungeonsCompleted / dungeonHoursSimulated).toFixed(1);
-        let averageTime = (dungeonHoursSimulated * 60 / simResult.dungeonsCompleted).toFixed(1);
+        const completionCount = simResult.dungeonCompletionTimeCount || simResult.dungeonsCompleted;
+        const hasCompletionStatistics = completionCount > 0 && simResult.dungeonCompletionTimeMean > 0;
+        const averageTimeNanoseconds = hasCompletionStatistics
+            ? simResult.dungeonCompletionTimeMean
+            : (simResult.lastDungeonFinishTime || simResult.simulatedTime || 0) / Math.max(simResult.dungeonsCompleted, 1);
+        const averageTimeMinutes = averageTimeNanoseconds / ONE_SECOND / 60;
+        encountersPerHour = averageTimeMinutes > 0 ? (60 / averageTimeMinutes).toFixed(1) : "0.0";
+        let averageTime = formatMinutesAndSeconds(averageTimeNanoseconds);
         encountersRow = createRow(["col-md-6", "col-md-6 text-end"], ["Average Time", averageTime]);
         encountersRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.averageTime");
-        if (simResult.minDungenonTime > 0) {
-            let minimumTime = (simResult.minDungenonTime / ONE_SECOND / 60).toFixed(1);
-            let minimumTimeRow = createRow(["col-md-6", "col-md-6 text-end"], ["Minimum Time", minimumTime]);
-            minimumTimeRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.minimumTime");
-            newChildren.push(minimumTimeRow);
-        }
-        if (simResult.maxDungenonTime > 0) {
-            let maximumTime = (simResult.maxDungenonTime / ONE_SECOND / 60).toFixed(1);
-            let maximumTimeRow = createRow(["col-md-6", "col-md-6 text-end"], ["Maximum Time", maximumTime]);
-            maximumTimeRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.maximumTime");
-            newChildren.push(maximumTimeRow);
-        }
+        newChildren.push(encountersRow);
+        encountersRow = null;
     } else {
         // 使用最后一场战斗完成时间来计算，避免未完成战斗的时间被计入
         let encounterHoursSimulated = simResult.lastEncounterFinishTime > 0 
@@ -2161,7 +2166,9 @@ function showKills(simResult, playerToDisplay) {
         newChildren.push(debuffOnLevelGapRow);
     }
 
-    newChildren.push(encountersRow);
+    if (encountersRow) {
+        newChildren.push(encountersRow);
+    }
 
     Object.keys(simResult.deaths)
         .filter(enemy => enemy !== "player1" && enemy !== "player2" && enemy !== "player3" && enemy !== "player4" && enemy !== "player5")
@@ -3158,9 +3165,17 @@ function startSimulation(selectedPlayers) {
     let simulationTimeInput = document.getElementById("inputSimulationTime");
     let simulationTimeLimit = Number(simulationTimeInput.value) * ONE_HOUR;
     let dungeonCountInput = document.getElementById("inputDungeonCount");
-    let simulationCount = Number(dungeonCountInput.value) || 100;
+    let simulationCount = Math.min(
+        MAX_DUNGEON_SIMULATIONS,
+        Math.max(1, Math.floor(Number(dungeonCountInput.value) || 100))
+    );
+    dungeonCountInput.value = simulationCount;
     let parallelCountInput = document.getElementById("inputParallelCount");
-    let parallelCount = Number(parallelCountInput.value) || 4;
+    let parallelCount = Math.min(
+        MAX_PARALLEL_WORKERS,
+        Math.max(1, Math.floor(Number(parallelCountInput.value) || 4))
+    );
+    parallelCountInput.value = parallelCount;
     buttonStopSimulation.style.display = 'block';
 
     let crates = [];

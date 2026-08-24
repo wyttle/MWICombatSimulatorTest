@@ -4,6 +4,8 @@ import Zone from "./combatsimulator/zone";
 import Labyrinth from "./combatsimulator/labyrinth";
 import { createGuildShrineBuffs } from "./combatsimulator/guildShrine";
 
+const MAX_DUNGEON_SIMULATIONS = 10000;
+
 // 创建 extraBuffs 的辅助函数
 function createExtraBuffs(extra) {
     let extraBuffs = [];
@@ -176,6 +178,13 @@ onmessage = async function (event) {
             }
 
             let targetCount = event.data.targetCount;
+            if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > MAX_DUNGEON_SIMULATIONS) {
+                this.postMessage({
+                    type: "simulation_error",
+                    error: "Dungeon simulation count must be an integer between 1 and " + MAX_DUNGEON_SIMULATIONS
+                });
+                break;
+            }
             let combatSimulator = new CombatSimulator(players, zone, null, { enableHpMpVisualization: false });
 
             const outer_worker = this;
