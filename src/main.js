@@ -2122,18 +2122,20 @@ function showKills(simResult, playerToDisplay) {
             failedDungeonsRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.dungeonsFailed");
             newChildren.push(failedDungeonsRow);
         }
-        const completionCount = simResult.dungeonCompletionTimeCount || simResult.dungeonsCompleted;
-        const hasCompletionStatistics = completionCount > 0 && simResult.dungeonCompletionTimeMean > 0;
-        const averageTimeNanoseconds = hasCompletionStatistics
-            ? simResult.dungeonCompletionTimeMean
-            : (simResult.lastDungeonFinishTime || simResult.simulatedTime || 0) / Math.max(simResult.dungeonsCompleted, 1);
-        const averageTimeMinutes = averageTimeNanoseconds / ONE_SECOND / 60;
-        encountersPerHour = averageTimeMinutes > 0 ? (60 / averageTimeMinutes).toFixed(1) : "0.0";
-        let averageTime = formatMinutesAndSeconds(averageTimeNanoseconds);
-        encountersRow = createRow(["col-md-6", "col-md-6 text-end"], ["Average Time", averageTime]);
-        encountersRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.averageTime");
-        newChildren.push(encountersRow);
-        encountersRow = null;
+        if (simResult.dungeonsCompleted > 0) {
+            const completionCount = simResult.dungeonCompletionTimeCount || simResult.dungeonsCompleted;
+            const hasCompletionStatistics = completionCount > 0 && simResult.dungeonCompletionTimeMean > 0;
+            const averageTimeNanoseconds = hasCompletionStatistics
+                ? simResult.dungeonCompletionTimeMean
+                : (simResult.lastDungeonFinishTime || simResult.simulatedTime || 0) / simResult.dungeonsCompleted;
+            const averageTimeMinutes = averageTimeNanoseconds / ONE_SECOND / 60;
+            encountersPerHour = averageTimeMinutes > 0 ? (60 / averageTimeMinutes).toFixed(1) : "0.0";
+            let averageTime = formatMinutesAndSeconds(averageTimeNanoseconds);
+            encountersRow = createRow(["col-md-6", "col-md-6 text-end"], ["Average Time", averageTime]);
+            encountersRow.firstElementChild.setAttribute("data-i18n", "common:simulationResults.averageTime");
+            newChildren.push(encountersRow);
+            encountersRow = null;
+        }
     } else {
         // 使用最后一场战斗完成时间来计算，避免未完成战斗的时间被计入
         let encounterHoursSimulated = simResult.lastEncounterFinishTime > 0 
