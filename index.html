@@ -736,6 +736,12 @@
                                 </button>
                             </div>
                             <div class="col-md-auto">
+                                <button id="buttonOptimizer" class="btn btn-primary" type="button"
+                                    data-bs-toggle="modal" data-bs-target="#optimizerModal" data-i18n="common:optimizer.open">
+                                    Team Optimizer
+                                </button>
+                            </div>
+                            <div class="col-md-auto">
                                 <div data-i18n="common:controls.darkMode">
                                 Dark Mode:
                                 </div>
@@ -1383,6 +1389,148 @@
             </div>
         </div>
         <!-- #endregion -->
+    </div>
+    <div class="modal" id="optimizerModal" tabindex="-1" aria-labelledby="optModalTitle" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="optModalTitle" data-i18n="common:optimizer.title">Team Optimizer</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="container-fluid">
+                        <h6 data-i18n="common:optimizer.settings">Simulation Settings</h6>
+                        <div class="row mb-1">
+                            <label class="col-md-3 col-form-label" data-i18n="common:optimizer.participants">Team members</label>
+                            <div class="col-md d-flex flex-wrap align-items-center gap-3">
+                                <div class="d-flex flex-wrap align-items-center gap-3" id="optParticipants"></div>
+                                <button type="button" class="btn btn-sm btn-outline-primary" id="optButtonSelectAllPlayers" data-i18n="common:selectAllOrNot">Select / Deselect All</button>
+                            </div>
+                        </div>
+                        <div class="row mb-1">
+                            <label for="optSelectDungeon" class="col-md-3 col-form-label" data-i18n="common:optimizer.dungeon">Dungeon</label>
+                            <div class="col-md">
+                                <select id="optSelectDungeon" class="form-select"></select>
+                            </div>
+                        </div>
+                        <div class="row mb-1">
+                            <label for="optSelectDifficulty" class="col-md-3 col-form-label" data-i18n="common:optimizer.difficulty">Difficulty</label>
+                            <div class="col-md">
+                                <select id="optSelectDifficulty" class="form-select">
+                                    <option value="0">T0</option>
+                                    <option value="1" selected>T1</option>
+                                    <option value="2">T2</option>
+                                    <option value="3">T3</option>
+                                    <option value="4">T4</option>
+                                    <option value="5">T5</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row mb-1">
+                            <label for="optInputDungeonCount" class="col-md-3 col-form-label" data-i18n="common:optimizer.dungeonCount">Dungeon Count</label>
+                            <div class="col-md">
+                                <input type="number" id="optInputDungeonCount" class="form-control" min="1" max="10000" value="2000" required />
+                            </div>
+                        </div>
+                        <details class="mb-2">
+                            <summary data-i18n="common:optimizer.advanced">Advanced Settings</summary>
+                            <div class="row g-2 align-items-center mt-2">
+                                <div class="col-6">
+                                    <label for="optInputParallelCount" class="col-form-label text-nowrap" data-i18n="common:optimizer.parallelCount">Parallel Workers</label>
+                                </div>
+                                <div class="col-4">
+                                    <input type="range" id="optInputParallelCount" class="form-range" min="1" max="8" value="1" />
+                                </div>
+                                <div class="col-2 text-center">
+                                    <span id="optParallelCountDisplay" class="badge bg-primary">1</span>
+                                </div>
+                            </div>
+                            <div class="row mb-1">
+                                <label for="optInputSeedCount" class="col-md-3 col-form-label" data-i18n="common:optimizer.seedCount">Random samples</label>
+                                <div class="col-md">
+                                    <input type="number" id="optInputSeedCount" class="form-control" min="2" max="128" value="16" required />
+                                </div>
+                            </div>
+                            <div class="row mb-1">
+                                <label for="optInputMaxEvaluations" class="col-md-3 col-form-label" data-i18n="common:optimizer.maxEvaluations">Maximum evaluations</label>
+                                <div class="col-md">
+                                    <input type="number" id="optInputMaxEvaluations" class="form-control" min="5" max="500" value="60" required />
+                                    <small id="optScanEstimate" class="text-muted"></small>
+                                </div>
+                            </div>
+                        </details>
+                        <ul class="nav nav-tabs" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link active" id="optTabTriggers" data-bs-toggle="tab" data-bs-target="#optPaneTriggers" role="tab" aria-controls="optPaneTriggers" aria-selected="true" data-i18n="common:optimizer.tabs.triggers">Triggers</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="optTabUpgrades" data-bs-toggle="tab" data-bs-target="#optPaneUpgrades" role="tab" aria-controls="optPaneUpgrades" aria-selected="false" data-i18n="common:optimizer.tabs.upgrades">Equipment upgrades</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button type="button" class="nav-link" id="optTabResults" data-bs-toggle="tab" data-bs-target="#optPaneResults" role="tab" aria-controls="optPaneResults" aria-selected="false" data-i18n="common:optimizer.tabs.results">Results</button>
+                            </li>
+                        </ul>
+                        <div class="tab-content pt-2">
+                            <div class="tab-pane fade show active" id="optPaneTriggers" role="tabpanel" aria-labelledby="optTabTriggers" tabindex="0">
+                                <div id="optTriggerContainer"></div>
+                            </div>
+                            <div class="tab-pane fade" id="optPaneUpgrades" role="tabpanel" aria-labelledby="optTabUpgrades" tabindex="0">
+                                <div class="row mb-1">
+                                    <label for="optSelectPlayer" class="col-md-3 col-form-label" data-i18n="common:optimizer.selectPlayer">Select Player</label>
+                                    <div class="col-md">
+                                        <select id="optSelectPlayer" class="form-select"></select>
+                                    </div>
+                                </div>
+                                <div class="row mb-1">
+                                    <label for="optSelectSlot" class="col-md-3 col-form-label" data-i18n="common:optimizer.slot">Equipment slot</label>
+                                    <div class="col-md">
+                                        <select id="optSelectSlot" class="form-select"></select>
+                                    </div>
+                                </div>
+                                <div class="row mb-1">
+                                    <label for="optSelectItem" class="col-md-3 col-form-label" data-i18n="common:optimizer.item">Item</label>
+                                    <div class="col-md">
+                                        <select id="optSelectItem" class="form-select"></select>
+                                    </div>
+                                </div>
+                                <div class="row mb-1">
+                                    <label for="optInputEnhancement" class="col-md-3 col-form-label" data-i18n="common:optimizer.enhancement">Enhancement level</label>
+                                    <div class="col-md">
+                                        <input type="number" id="optInputEnhancement" class="form-control" min="0" max="20" value="0" required />
+                                    </div>
+                                </div>
+                                <div class="row mb-2">
+                                    <div class="col-md-auto">
+                                        <button type="button" id="optButtonAddCandidate" class="btn btn-primary" data-i18n="common:optimizer.addCandidate">Add candidate</button>
+                                    </div>
+                                    <div class="col-md-auto">
+                                        <button type="button" id="optButtonGenerateUpgrades" class="btn btn-primary" data-i18n="common:optimizer.generateUpgrades">Generate upgrades</button>
+                                    </div>
+                                </div>
+                                <div id="optCandidateList"></div>
+                            </div>
+                            <div class="tab-pane fade" id="optPaneResults" role="tabpanel" aria-labelledby="optTabResults" tabindex="0">
+                                <div id="optResults"></div>
+                            </div>
+                        </div>
+                        <div class="mt-2">
+                            <small id="optStatus" class="text-muted" role="status" aria-live="polite" data-i18n="common:optimizer.status.ready">Ready</small>
+                            <div id="optProgress" class="progress mt-1 d-none">
+                                <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="width: 0%;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" id="optButtonRun" class="btn btn-primary" data-i18n="common:optimizer.run">Start Simulation</button>
+                    <button type="button" id="optButtonScan" class="btn btn-primary" data-i18n="common:optimizer.scan">Scan thresholds</button>
+                    <button type="button" id="optButtonStop" class="btn btn-danger" data-i18n="common:optimizer.stop" disabled>Stop Simulation</button>
+                    <button type="button" id="optButtonApply" class="btn btn-outline-primary" data-i18n="common:optimizer.apply">Apply</button>
+                    <button type="button" id="optButtonExport" class="btn btn-outline-secondary" data-i18n="common:optimizer.export">Export</button>
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" data-i18n="common:optimizer.close">Close</button>
+                </div>
+            </div>
+        </div>
     </div>
     <div class="modal" id="startSimulationModal" tabindex="-1">
         <!-- #region Start Simulation Modal -->

@@ -6,7 +6,6 @@ import houseRoomDetailMap from "./combatsimulator/data/houseRoomDetailMap.json";
 import Ability from "./combatsimulator/ability.js";
 import Consumable from "./combatsimulator/consumable.js";
 import HouseRoom from "./combatsimulator/houseRoom"
-import combatTriggerDependencyDetailMap from "./combatsimulator/data/combatTriggerDependencyDetailMap.json";
 import combatTriggerConditionDetailMap from "./combatsimulator/data/combatTriggerConditionDetailMap.json";
 import combatTriggerComparatorDetailMap from "./combatsimulator/data/combatTriggerComparatorDetailMap.json";
 import abilitySlotsLevelRequirementList from "./combatsimulator/data/abilitySlotsLevelRequirementList.json";
@@ -17,6 +16,9 @@ import combatStyleDetailMap from "./combatsimulator/data/combatStyleDetailMap.js
 import openableLootDropMap from "./combatsimulator/data/openableLootDropMap.json";
 import achievementTierMap from "./combatsimulator/data/achievementTierDetailMap.json"
 import achievementDetailMap from "./combatsimulator/data/achievementDetailMap.json"
+import { fillDependencySelect, fillConditionSelect, fillComparatorSelect } from "./triggerEditor.js";
+import { parseTeamStates, teamStateToPlayerDataMap } from "./optimizer/teamState.js";
+import { initOptimizer } from "./optimizer/panel.js";
 
 import patchNote from "../patchNote.json";
 
@@ -971,7 +973,7 @@ function updateTriggerModal() {
         let triggerValueInput = document.getElementById("inputTriggerValue_" + i);
 
         showElement(triggerDependencySelect);
-        fillTriggerDependencySelect(triggerDependencySelect);
+        fillDependencySelect(triggerDependencySelect);
 
         if (modalTriggers[i].dependencyHrid == "") {
             hideElement(triggerConditionSelect);
@@ -983,7 +985,7 @@ function updateTriggerModal() {
 
         triggerDependencySelect.value = modalTriggers[i].dependencyHrid;
         showElement(triggerConditionSelect);
-        fillTriggerConditionSelect(triggerConditionSelect, modalTriggers[i].dependencyHrid);
+        fillConditionSelect(triggerConditionSelect, modalTriggers[i].dependencyHrid);
 
         if (modalTriggers[i].conditionHrid == "") {
             hideElement(triggerComparatorSelect);
@@ -994,7 +996,7 @@ function updateTriggerModal() {
 
         triggerConditionSelect.value = modalTriggers[i].conditionHrid;
         showElement(triggerComparatorSelect);
-        fillTriggerComparatorSelect(triggerComparatorSelect, modalTriggers[i].conditionHrid);
+        fillComparatorSelect(triggerComparatorSelect, modalTriggers[i].conditionHrid);
 
         if (modalTriggers[i].comparatorHrid == "") {
             hideElement(triggerValueInput);
@@ -1018,53 +1020,6 @@ function updateTriggerModal() {
     updateContent();
 }
 
-function fillTriggerDependencySelect(element) {
-    element.length = 0;
-    element.add(new Option("", ""));
-
-    for (const dependency of Object.values(combatTriggerDependencyDetailMap).sort(
-        (a, b) => a.sortIndex - b.sortIndex
-    )) {
-        let opt = new Option(dependency.name, dependency.hrid);
-        opt.setAttribute("data-i18n", "combatTriggerDependencyNames." + dependency.hrid);
-        element.add(opt);
-    }
-}
-
-function fillTriggerConditionSelect(element, dependencyHrid) {
-    let dependency = combatTriggerDependencyDetailMap[dependencyHrid];
-
-    let conditions;
-    if (dependency.isSingleTarget) {
-        conditions = Object.values(combatTriggerConditionDetailMap).filter((condition) => condition.isSingleTarget);
-    } else {
-        conditions = Object.values(combatTriggerConditionDetailMap).filter((condition) => condition.isMultiTarget);
-    }
-
-    element.length = 0;
-    element.add(new Option("", ""));
-
-    for (const condition of Object.values(conditions).sort((a, b) => a.sortIndex - b.sortIndex)) {
-        let opt = new Option(condition.name, condition.hrid);
-        opt.setAttribute("data-i18n", "combatTriggerConditionNames." + condition.hrid);
-        element.add(opt);
-    }
-}
-
-function fillTriggerComparatorSelect(element, conditionHrid) {
-    let condition = combatTriggerConditionDetailMap[conditionHrid];
-
-    let comparators = condition.allowedComparatorHrids.map((hrid) => combatTriggerComparatorDetailMap[hrid]);
-
-    element.length = 0;
-    element.add(new Option("", ""));
-
-    for (const comparator of Object.values(comparators).sort((a, b) => a.sortIndex - b.sortIndex)) {
-        let opt = new Option(comparator.name, comparator.hrid);
-        opt.setAttribute("data-i18n", "combatTriggerComparatorNames." + comparator.hrid);
-        element.add(opt);
-    }
-}
 
 function hideElement(element) {
     element.classList.remove("d-flex");
@@ -3067,6 +3022,30 @@ function initSimulationControls() {
     });
 }
 
+function collectSimulationExtra() {
+    let extra = {};
+    extra.mooPass = document.getElementById("mooPassToggle").checked;
+    extra.comExp = 0;
+    if (document.getElementById("comExpToggle").checked) {
+        extra.comExp = Number(document.getElementById("comExpInput").value);
+    }
+    extra.comDrop = 0;
+    if (document.getElementById("comDropToggle").checked) {
+        extra.comDrop = Number(document.getElementById("comDropInput").value);
+    }
+    extra.enableHpMpVisualization = document.getElementById("hpMpVisualizationToggle").checked;
+    extra.personalBuffs = [];
+    if (document.getElementById("personalBuffsToggle").checked) {
+        let personalBuffs = document.getElementById("personalBuffsBox").querySelectorAll("input");
+        for (let buff of personalBuffs) {
+            if (buff.checked) {
+                extra.personalBuffs.push(buff.value);
+            }
+        }
+    }
+    return extra;
+}
+
 function startSimulation(selectedPlayers) {
     let simLabyrinthToggle = document.getElementById("simLabyrinthToggle");
     let simAllLabyrinthsToggle = document.getElementById("simAllLabyrinthsToggle");
@@ -3134,26 +3113,7 @@ function startSimulation(selectedPlayers) {
         }
     }
 
-    let extra = {};
-    extra.mooPass = document.getElementById("mooPassToggle").checked;
-    extra.comExp = 0;
-    if (document.getElementById("comExpToggle").checked) {
-        extra.comExp = Number(document.getElementById("comExpInput").value);
-    }
-    extra.comDrop = 0;
-    if (document.getElementById("comDropToggle").checked) {
-        extra.comDrop = Number(document.getElementById("comDropInput").value);
-    }
-    extra.enableHpMpVisualization = document.getElementById("hpMpVisualizationToggle").checked;
-    extra.personalBuffs = [];
-    if (document.getElementById("personalBuffsToggle").checked) {
-        let personalBuffs = document.getElementById("personalBuffsBox").querySelectorAll("input");
-        for (let buff of personalBuffs) {
-            if (buff.checked) {
-                extra.personalBuffs.push(buff.value);
-            }
-        }
-    }
+    const extra = collectSimulationExtra();
     const guildShrineLevels = collectGuildShrineLevels();
 
     let simAllZonesToggle = document.getElementById("simAllZoneToggle");
@@ -4615,6 +4575,7 @@ function showErrorModal(error) {
 }
 
 window.prices;
+let marketData;
 
 async function fetchPrices() {
     let response = null;
@@ -4658,6 +4619,7 @@ async function fetchPrices() {
         const pricesJson = await response.json();
 
         const priceTmp = pricesJson['marketData'];
+        marketData = priceTmp;
         window.prices = {};
         for (const item in itemDetailMap) {
             const hrid = itemDetailMap[item].hrid;
@@ -5009,3 +4971,71 @@ initHpMpVisualization();
 
 updateState();
 updateUI();
+
+// 空白队员和真正导入过的队员都存在 playerDataMap 里，靠内容区分：
+// 有装备、有技能，或任意等级高于 1，就认为这一位是导入过的。
+function isImportedPlayer(id) {
+    const raw = playerDataMap[id];
+    if (!raw) return false;
+    try {
+        const data = JSON.parse(raw);
+        if (data.player?.equipment?.length) return true;
+        if ((data.abilities ?? []).some((ability) => ability?.abilityHrid)) return true;
+        return Object.entries(data.player ?? {}).some(([key, value]) => key.endsWith("Level") && Number(value) > 1);
+    } catch (error) {
+        return false;
+    }
+}
+
+initOptimizer({
+    getTeamSnapshot() {
+        savePreviousPlayer(currentPlayerTabId);
+        const boxes = Array.from(document.querySelectorAll(".player-checkbox"));
+        // 优化器只做地下城模拟，名单按「是否真的导入过」判定，
+        // 不跟随主界面「模拟地下城」开关对 player4/player5 的显隐。
+        const availableIds = ["1", "2", "3", "4", "5"].filter(isImportedPlayer);
+        if (availableIds.length === 0) availableIds.push(String(currentPlayerTabId));
+        const playerIds = boxes
+            .filter((checkbox) => checkbox.checked)
+            .map((checkbox) => checkbox.id.replace("player", ""))
+            .filter((id) => availableIds.includes(id));
+        // 主界面关掉「模拟地下城」时这些复选框全是空的，但优化器跑的就是地下城：
+        // 此时默认让所有导入过的队员参战，而不是退回到当前标签页那一个人。
+        if (playerIds.length === 0) playerIds.push(...availableIds);
+        const dungeonSelect = document.getElementById("selectDungeon");
+        const count = Number(document.getElementById("inputDungeonCount").value);
+        const parallelInput = document.getElementById("inputParallelCount");
+        return {
+            // 整份名单都交给优化器，参战与否在优化器里勾选，不必回主界面切换。
+            teamState: parseTeamStates(playerDataMap, availableIds),
+            availableIds,
+            playerIds,
+            zone: {
+                zoneHrid: dungeonSelect.value,
+                difficultyTier: Number(document.getElementById("selectDifficulty").value),
+            },
+            dungeonCount: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 2000,
+            parallelCount: Number(parallelInput.value),
+            parallelMax: Number(parallelInput.max),
+            dungeonOrder: Array.from(dungeonSelect.options, (option) => option.value),
+            extra: collectSimulationExtra(),
+            guildShrineLevels: collectGuildShrineLevels(),
+        };
+    },
+    applyTeamSnapshot(teamState, playerIds) {
+        Object.assign(playerDataMap, teamStateToPlayerDataMap(teamState));
+        // 优化器里选定的参战名单同步回主界面勾选框，两边保持一致。
+        if (Array.isArray(playerIds) && playerIds.length) {
+            for (const checkbox of document.querySelectorAll(".player-checkbox")) {
+                checkbox.checked = playerIds.includes(checkbox.id.replace("player", ""));
+            }
+        }
+        updateNextPlayer(currentPlayerTabId);
+        updateState();
+        updateUI();
+    },
+    async getPrices() {
+        if (!window.prices) await fetchPrices();
+        return { prices: window.prices, marketData };
+    },
+});

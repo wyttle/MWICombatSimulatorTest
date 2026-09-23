@@ -1,3 +1,15 @@
+// 本脚本和 locales/*.json 都不参与打包，文件名没有 hash，浏览器会长期沿用缓存副本。
+// 构建时会给 script 标签加 ?v=<内容hash>，这里把同一个版本串转发给 locales 请求，
+// 否则升级后可能出现「新代码 + 旧翻译」，插值文案会原样显示成 {{id}} 这样的占位符。
+// document.currentScript 只在脚本同步执行期间可用，必须在顶层取。
+const assetVersion = (function () {
+    try {
+        return new URL(document.currentScript.src, location.href).searchParams.get('v') || '';
+    } catch (error) {
+        return '';
+    }
+})();
+
     const Wa = {
         en: {
             translation: {
@@ -11827,7 +11839,8 @@ document.addEventListener('DOMContentLoaded', function () {
             ns: ['translation', 'common'],
             defaultNS: 'translation',
             backend: {
-                loadPath: 'locales/{{lng}}/common.json'
+                loadPath: 'locales/{{lng}}/common.json',
+                queryStringParams: assetVersion ? { v: assetVersion } : {}
             },
             interpolation: {
                 escapeValue: !1
@@ -11850,6 +11863,20 @@ document.addEventListener('DOMContentLoaded', function () {
     i18next.addResourceBundle('zh', 'translation', Wa.zh.translation);
 
     // 更新页面内容
+    // 带编号的动态文案（例如「玩家 1」「候选方案 2」）通过 data-i18n-options 传插值参数。
+    // 不解析成插值就只能在生成时求值一次，切换语言后会永远停在旧语言。
+    function translateElement(key, element) {
+        const raw = element.getAttribute('data-i18n-options');
+        if (!raw) {
+            return i18next.t(key);
+        }
+        try {
+            return i18next.t(key, JSON.parse(raw));
+        } catch (error) {
+            return i18next.t(key);
+        }
+    }
+
     function updateContent() {
         // 更新标题
         document.title = i18next.t('common:title');
@@ -11858,7 +11885,7 @@ document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('[data-i18n]').forEach(function (element) {
             const key = element.getAttribute('data-i18n');
             if (key) {
-                element.textContent = i18next.t(key);
+                element.textContent = translateElement(key, element);
             }
         });
 
@@ -11874,10 +11901,14 @@ document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('option[data-i18n]').forEach(function (element) {
             const key = element.getAttribute('data-i18n');
             if (key) {
-                element.textContent = i18next.t(key);
+                element.textContent = translateElement(key, element);
             }
         });
     }
+
+    // 动态生成的 DOM（例如队伍优化器面板）插入后需要重新扫描 data-i18n，
+    // 因此把刷新函数暴露到全局；语言切换仍走原有回调。
+    window.updateContent = updateContent;
 
     // 添加语言切换器
     function addLanguageSwitcher() {

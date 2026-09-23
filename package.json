@@ -10,6 +10,7 @@
         "extract:guild-shrines": "node extractGuildShrineData.cjs",
         "validate:guild-shrines": "node validateGuildShrines.cjs",
         "validate:mwi-importer": "node validateMWIImporter.cjs",
+        "validate:optimizer": "node validateOptimizer.cjs",
         "watch": "webpack --watch",
         "start": "webpack serve --mode development --open"
     },
