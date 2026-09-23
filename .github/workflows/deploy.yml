@@ -25,7 +25,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # validateOptimizer.cjs 用 module.registerHooks 直接加载 ESM 源码，需要 22.15+。
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
@@ -37,6 +38,9 @@ jobs:
       - name: Validate MWI importer
         run: npm run validate:mwi-importer
 
+      - name: Validate team optimizer
+        run: npm run validate:optimizer
+
       - name: Build
         run: |
           export PUBLIC_PATH=/MWICombatSimulatorTest/
@@ -47,8 +51,10 @@ jobs:
           echo "=== Checking dist directory structure ==="
           ls -la ./dist/
           echo ""
-          echo "=== Checking index.html paths ==="
-          grep -E 'src=".*(bundle\.js|js/i18n\.js)"' ./dist/index.html
+          echo "=== Checking cache-busting query strings ==="
+          # 主包与 js/ 下的脚本文件名固定，引用必须带内容 hash，否则升级后浏览器会继续跑缓存里的旧代码。
+          grep -E 'src="[^"]*bundle\.js\?v=[0-9a-f]{8}"' ./dist/index.html
+          grep -E 'src="[^"]*js/i18n\.js\?v=[0-9a-f]{8}"' ./dist/index.html
           echo ""
           echo "=== Checking bundle.js publicPath ==="
           grep -o '__webpack_require__\.p = "[^"]*"' ./dist/bundle.js | head -1
