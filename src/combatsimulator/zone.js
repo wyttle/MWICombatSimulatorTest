@@ -1,5 +1,6 @@
 import actionDetailMap from "./data/actionDetailMap.json";
 import Monster from "./monster";
+import { spawnRandom } from "./rng";
 
 class Zone {
     constructor(hrid, difficultyTier) {
@@ -31,7 +32,7 @@ class Zone {
         let totalStrength = 0;
 
         outer: for (let i = 0; i < this.monsterSpawnInfo.randomSpawnInfo.maxSpawnCount; i++) {
-            let randomWeight = totalWeight * Math.random();
+            let randomWeight = totalWeight * spawnRandom();
             let cumulativeWeight = 0;
 
             for (const spawn of this.monsterSpawnInfo.randomSpawnInfo.spawns) {
@@ -87,7 +88,7 @@ class Zone {
             let totalStrength = 0;
 
             outer: for (let i = 0; i < monsterSpawns.maxSpawnCount; i++) {
-                let randomWeight = totalWeight * Math.random();
+                let randomWeight = totalWeight * spawnRandom();
                 let cumulativeWeight = 0;
 
                 for (const spawn of monsterSpawns.spawns) {

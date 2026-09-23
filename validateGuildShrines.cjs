@@ -31,7 +31,10 @@ async function loadGuildShrineModule() {
 
 async function loadCombatUnit() {
     const modulePath = path.join(projectRoot, "src", "combatsimulator", "combatUnit.js");
-    const source = fs.readFileSync(modulePath, "utf8");
+    // data: URL 模块无法解析相对导入，这里把随机源内联成未播种时的等价实现。
+    const source = fs
+        .readFileSync(modulePath, "utf8")
+        .replace('import { combatRandom } from "./rng";', "const combatRandom = Math.random;");
     return (await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`)).default;
 }
 

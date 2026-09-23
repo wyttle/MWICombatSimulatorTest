@@ -3,6 +3,7 @@ import Player from "./combatsimulator/player";
 import Zone from "./combatsimulator/zone";
 import Labyrinth from "./combatsimulator/labyrinth";
 import { createGuildShrineBuffs } from "./combatsimulator/guildShrine";
+import { setSimulationSeed } from "./combatsimulator/rng";
 
 const MAX_DUNGEON_SIMULATIONS = 10000;
 
@@ -112,6 +113,8 @@ function createExtraBuffs(extra) {
 onmessage = async function (event) {
     switch (event.data.type) {
         case "start_simulation": {
+            // 不带 seed 时恢复 Math.random，主界面行为与改造前一致。
+            setSimulationSeed(event.data.seed ?? null);
             let extraBuffs = createExtraBuffs(event.data.extra);
 
             let playersData = event.data.players;
@@ -161,6 +164,8 @@ onmessage = async function (event) {
 
         case "start_dungeon_by_count": {
             // 按次数模拟地下城
+            // 优化器按 seed 配对评估；主界面不传 seed，行为不变。
+            setSimulationSeed(event.data.seed ?? null);
             let extraBuffs = createExtraBuffs(event.data.extra);
 
             let playersData = event.data.players;
@@ -194,7 +199,9 @@ onmessage = async function (event) {
                         type: "simulation_progress",
                         progress: progressData.progress,
                         zone: progressData.zone,
-                        difficultyTier: progressData.difficultyTier
+                        difficultyTier: progressData.difficultyTier,
+                        completed: progressData.completed,
+                        failed: progressData.failed
                     });
                 });
                 this.postMessage({ type: "simulation_result", simResult: simResult });

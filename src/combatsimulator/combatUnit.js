@@ -1,3 +1,4 @@
+import { combatRandom } from "./rng";
 class CombatUnit {
     isPlayer;
     isStunned = false;
@@ -566,7 +567,7 @@ class CombatUnit {
                     if (haste > 0) {
                         cooldownDuration = cooldownDuration * 100 / (100 + haste);
                     }
-                    ability.lastUsed = currentTime - Math.floor(cooldownDuration * 0.5) + Math.floor(Math.random() * cooldownDuration * 0.5);
+                    ability.lastUsed = currentTime - Math.floor(cooldownDuration * 0.5) + Math.floor(combatRandom() * cooldownDuration * 0.5);
                 }
             });
     }
