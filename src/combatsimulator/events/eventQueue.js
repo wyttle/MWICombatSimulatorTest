@@ -88,19 +88,19 @@ class EventQueue {
         return undefined;
     }
 
+    // 桶空了必须连键一起删：bySource/byTarget 的键是战斗单位，
+    // 只清空 Set 会让每一只死怪都留在 Map 里，长时间模拟会耗尽内存。
+    _detach(index, key, event) {
+        const bucket = index.get(key);
+        if (!bucket) return;
+        bucket.delete(event);
+        if (bucket.size === 0) index.delete(key);
+    }
+
     _removeFromIndexes(event) {
-        if (event.type !== undefined) {
-            const s = this.byType.get(event.type);
-            if (s) s.delete(event);
-        }
-        if (event.source !== undefined) {
-            const s = this.bySource.get(event.source);
-            if (s) s.delete(event);
-        }
-        if (event.target !== undefined) {
-            const s = this.byTarget.get(event.target);
-            if (s) s.delete(event);
-        }
+        if (event.type !== undefined) this._detach(this.byType, event.type, event);
+        if (event.source !== undefined) this._detach(this.bySource, event.source, event);
+        if (event.target !== undefined) this._detach(this.byTarget, event.target, event);
     }
 
     _markDeleted(event) {
