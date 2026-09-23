@@ -11,6 +11,28 @@ const publicPath = process.env.PUBLIC_PATH || 'auto';
 const htmlAssetPrefix = process.env.PUBLIC_PATH || '/';
 const isProduction = process.env.NODE_ENV === 'production';
 
+// bundle.js 的文件名是固定的（worker 分包自带 hash，主包没有），浏览器会长期沿用缓存副本。
+// 升级后如果主包还是旧的，界面会出现「新资源 + 旧代码」的组合，用户看到的 bug 早已修好却依然复现。
+// 这里在产物写出阶段按主包内容 hash 给 index.html 里的引用加查询串。
+class BundleVersionPlugin {
+  apply(compiler) {
+    const { Compilation, sources } = compiler.webpack;
+    compiler.hooks.thisCompilation.tap('BundleVersionPlugin', (compilation) => {
+      compilation.hooks.processAssets.tap(
+        { name: 'BundleVersionPlugin', stage: Compilation.PROCESS_ASSETS_STAGE_REPORT },
+        (assets) => {
+          const html = assets['index.html'];
+          const bundle = assets['bundle.js'];
+          if (!html || !bundle) return;
+          const hash = crypto.createHash('sha256').update(bundle.source()).digest('hex').slice(0, 8);
+          const patched = html.source().toString().replace(/src="([^"?]*bundle\.js)"/g, `src="$1?v=${hash}"`);
+          compilation.updateAsset('index.html', new sources.RawSource(patched));
+        },
+      );
+    });
+  }
+}
+
 module.exports = {
   entry: './src/main.js',
   output: {
@@ -51,6 +73,7 @@ module.exports = {
     open: true,
   },
   plugins: [
+    new BundleVersionPlugin(),
     new CopyWebpackPlugin({
       patterns: [
         { from: path.resolve(__dirname, 'patchNote.json'), to: 'patchNote.json' },
