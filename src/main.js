@@ -19,6 +19,7 @@ import achievementDetailMap from "./combatsimulator/data/achievementDetailMap.js
 import { fillDependencySelect, fillConditionSelect, fillComparatorSelect } from "./triggerEditor.js";
 import { parseTeamStates, teamStateToPlayerDataMap } from "./optimizer/teamState.js";
 import { initOptimizer } from "./optimizer/panel.js";
+import { maxParallelWorkers } from "./workerBudget.js";
 
 import patchNote from "../patchNote.json";
 
@@ -2908,8 +2909,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const parallelCountDisplay = document.getElementById('parallelCountDisplay');
     const logicalCores = navigator.hardwareConcurrency || 8;
     const physicalCores = Math.max(1, Math.floor(logicalCores / 2)); // 估算物理核心数
-    const defaultCores = Math.max(1, physicalCores - 1); // 默认保留1个核心给系统
-    parallelCountInput.max = physicalCores;
+    // 线程数还要受内存约束：核多的机器按核数开满会让页面 OOM，详见 workerBudget.js。
+    const maxWorkers = maxParallelWorkers(physicalCores);
+    const defaultCores = Math.max(1, maxWorkers - 1); // 默认保留1个核心给系统
+    parallelCountInput.max = maxWorkers;
     parallelCountInput.value = defaultCores;
     parallelCountDisplay.textContent = defaultCores;
 

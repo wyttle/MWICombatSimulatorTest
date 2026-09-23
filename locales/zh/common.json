@@ -14,6 +14,7 @@
         "seedCount": "随机样本数",
         "maxEvaluations": "最大评估次数",
         "scanEstimate": "已勾选 {{thresholds}} 个条件：跑完全部分辨率约需 {{evaluations}} 次评估，折合约 {{runs}} 场地下城。",
+        "memoryEstimate": "并行占用约 {{memory}}：每个线程峰值约 {{perWorker}}，开太多会让页面耗尽内存崩溃。",
         "advanced": "高级设置",
         "tabs": {
             "triggers": "触发条件",

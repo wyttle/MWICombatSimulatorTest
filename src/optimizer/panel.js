@@ -6,11 +6,12 @@ import { comparePaired, seedList } from "./stats.js";
 import { priceChanges, priceConsumableDelta } from "./cost.js";
 import { listEquipmentCandidates, buildChange, applyChanges, validateChanges, generateUpgradeCandidates } from "./candidates.js";
 import { scanThresholds, estimateScanBudget } from "./search.js";
+import { WORKER_PEAK_MB, maxParallelWorkers } from "../workerBudget.js";
 
 const EQUIPMENT_SLOTS = ["head", "body", "legs", "feet", "hands", "main_hand", "two_hand", "off_hand", "pouch", "neck", "earrings", "ring", "back", "charm"].map((slot) => `/equipment_types/${slot}`);
 
 export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices }) {
-    const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
+    const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optMemoryEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     const modal = ui.optimizerModal;
     let snapshot = null;
@@ -515,6 +516,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         }
         const budget = estimateScanBudget(active);
         if (!budget) return ui.optScanEstimate.replaceChildren();
+
         // 估算值可能超过输入框允许的上限；此时填满上限，提示里仍给出真实需求，让截断可预期。
         const cap = Number(ui.optInputMaxEvaluations.max) || budget;
         if (!budgetTouched) ui.optInputMaxEvaluations.value = String(Math.min(budget, cap));
@@ -523,6 +525,18 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             thresholds: format(active.length, 0),
             evaluations: format(budget, 0),
             runs: Number.isFinite(runs) ? format(runs, 0) : t("result.unavailable"),
+        }));
+        translate();
+    }
+
+    // 并行线程数直接决定峰值内存，UI 不写明的话没人会把「16 核」和「3 GB」联系起来。
+    function updateMemoryEstimate() {
+        const workers = Number(ui.optInputParallelCount.value);
+        if (!Number.isFinite(workers) || workers < 1) return ui.optMemoryEstimate.replaceChildren();
+        const megabytes = workers * WORKER_PEAK_MB;
+        ui.optMemoryEstimate.replaceChildren(label("memoryEstimate", "", {
+            memory: megabytes >= 1024 ? `${(megabytes / 1024).toFixed(1)} GB` : `${megabytes} MB`,
+            perWorker: `${WORKER_PEAK_MB} MB`,
         }));
         translate();
     }
@@ -838,9 +852,11 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             ui.optSelectDungeon.value = snapshot.zone.zoneHrid;
             ui.optSelectDifficulty.value = String(snapshot.zone.difficultyTier);
             ui.optInputDungeonCount.value = String(snapshot.dungeonCount);
-            ui.optInputParallelCount.max = String(snapshot.parallelMax);
-            ui.optInputParallelCount.value = String(snapshot.parallelCount);
+            const parallelMax = maxParallelWorkers(snapshot.parallelMax);
+            ui.optInputParallelCount.max = String(parallelMax);
+            ui.optInputParallelCount.value = String(Math.max(1, Math.min(snapshot.parallelCount, parallelMax)));
             ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value;
+            updateMemoryEstimate();
             ui.optProgress.classList.add("d-none");
             renderParticipants();
             renderTriggers();
@@ -874,7 +890,10 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     });
     ui.optTabTriggers.addEventListener("shown.bs.tab", () => { mode = "triggers"; });
     ui.optTabUpgrades.addEventListener("shown.bs.tab", () => { mode = "upgrades"; });
-    ui.optInputParallelCount.addEventListener("input", () => { ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value; });
+    ui.optInputParallelCount.addEventListener("input", () => {
+        ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value;
+        updateMemoryEstimate();
+    });
     ui.optInputMaxEvaluations.addEventListener("input", () => { budgetTouched = true; });
     ui.optInputSeedCount.addEventListener("input", updateScanEstimate);
     ui.optInputDungeonCount.addEventListener("input", updateScanEstimate);

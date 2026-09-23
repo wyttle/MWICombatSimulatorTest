@@ -14,6 +14,7 @@
         "seedCount": "Random samples",
         "maxEvaluations": "Maximum evaluations",
         "scanEstimate": "{{thresholds}} condition(s) ticked: about {{evaluations}} evaluations to finish every resolution, roughly {{runs}} dungeon runs.",
+        "memoryEstimate": "Roughly {{memory}} in parallel: each worker peaks near {{perWorker}}, and too many will crash the page out of memory.",
         "advanced": "Advanced Settings",
         "tabs": {
             "triggers": "Triggers",
