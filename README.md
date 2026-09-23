@@ -35,6 +35,8 @@ Cost scales as *seeds × dungeon attempts × evaluations*: one evaluation is one
 
 Worker count buys speed and costs memory, linearly. One simulation worker peaks around 160–175 MB of heap regardless of how many dungeons it runs, because V8 lets garbage pile up that far before collecting — the live data is only 11–14 MB, and the same workload finishes in the same wall time under a 64 MB heap cap. Browsers expose no such cap for workers, so the peak simply multiplies: a 16-core machine running 15 workers asks for roughly 3 GB and can crash the tab out of memory on long dungeon runs. The slider is not clamped, since threads are where the throughput comes from; instead the optimizer prints the projected footprint under it (`WORKER_PEAK_MB` in `src/workerBudget.js`). If a run dies, lower the worker count before lowering the dungeon count — workers multiply the peak, dungeon attempts do not.
 
+Past roughly eight workers you are paying memory for very little speed. Measured on a 16-core/32-thread machine (Pirate Cove T1, five players, 500 dungeons per process): 1 process is 18 dungeons/s, 8 processes reach 111/s (77% parallel efficiency), 16 reach 148/s (51%), and 32 only 168/s (29%). The simulation is allocation-heavy, so sibling SMT threads fight over the same execution units and L3 rather than adding throughput. Eight to ten workers is the sweet spot on a 16-core machine; doubling that buys about a third more throughput for twice the memory. Per-process RSS is around 313 MB — higher than the 175 MB heap figure, since RSS also covers code and off-heap buffers — which is why fifteen workers can ask for over 4 GB.
+
 Behavioral validation (needs Node.js 22.15+ or 24):
 
 ```bash
