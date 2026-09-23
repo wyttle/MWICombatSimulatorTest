@@ -44,8 +44,24 @@ class CombatSimulator extends EventTarget {
         this.enableHpMpVisualization = options.enableHpMpVisualization || false;
         this._aliveTargetsBuf = new Array(32);
 
+        // 战斗日志只在团灭时回放最近若干条，却要为每一次攻击记录一条。
+        // 每条都新建对象会产生海量短命垃圾（500 次地下城约 94 万个对象，
+        // 2000 次地下城堆峰值 156 MB 而 GC 后只有 11 MB），多线程并行时直接撑爆内存。
+        // 这里预分配环形缓冲并原地复写字段，稳态下零分配；团灭时才拷出快照。
         this.wipeLogs = {
-            buffer: new Array(200),
+            buffer: Array.from({ length: 200 }, () => ({
+                time: 0,
+                wave: 0,
+                source: "",
+                ability: "",
+                target: "",
+                damage: 0,
+                beforeHp: 0,
+                afterHp: 0,
+                playersHp: players.map(() => ({ hrid: "", current: 0, max: 0 })),
+                isCrit: false,
+                error: null,
+            })),
             index: 0,
             count: 0,
             maxSize: 200
@@ -89,12 +105,34 @@ class CombatSimulator extends EventTarget {
         return cumulativeRanges[left].player;
     }
 
-        addToWipeLogs(logEntry) {
-        const { buffer, maxSize } = this.wipeLogs;
-
-        buffer[this.wipeLogs.index] = logEntry;
-        this.wipeLogs.index = (this.wipeLogs.index + 1) % maxSize;
-        this.wipeLogs.count = Math.min(this.wipeLogs.count + 1, maxSize);
+    // 原地写入环形缓冲的当前槽位，不分配任何对象。
+    // source 允许是战斗单位或空字符串（持续伤害没有来源单位）。
+    recordWipeLog(source, ability, target, damage, isCrit) {
+        const slot = this.wipeLogs.buffer[this.wipeLogs.index];
+        this.wipeLogs.index = (this.wipeLogs.index + 1) % this.wipeLogs.maxSize;
+        this.wipeLogs.count = Math.min(this.wipeLogs.count + 1, this.wipeLogs.maxSize);
+        try {
+            const afterHp = target?.combatDetails?.currentHitpoints || 0;
+            slot.error = null;
+            slot.time = this.simulationTime;
+            slot.wave = this.zone ? this.zone.encountersKilled - 1 : 0;
+            slot.source = source?.hrid || "UNKNOWN_SOURCE";
+            slot.ability = ability;
+            slot.target = target?.hrid || "UNKNOWN_TARGET";
+            slot.damage = damage;
+            slot.afterHp = afterHp;
+            slot.beforeHp = Math.max(0, afterHp + damage);
+            slot.isCrit = isCrit;
+            for (let i = 0; i < this.players.length; i++) {
+                const player = this.players[i];
+                const entry = slot.playersHp[i];
+                entry.hrid = player.hrid || "UNKNOWN_PLAYER";
+                entry.current = player.combatDetails?.currentHitpoints ?? 0;
+                entry.max = player.combatDetails?.maxHitpoints ?? 0;
+            }
+        } catch (error) {
+            slot.error = `[日志生成错误] ${error.message}`;
+        }
     }
 
     logAndResetWipeLogs() {
@@ -123,84 +161,28 @@ class CombatSimulator extends EventTarget {
         // console.log("===== 团灭日志结束 =====");
     }
     
-    buildCombatLog(source, ability, target, damageDone) {
-        try {
-            const sourceHrid = source?.hrid || "UNKNOWN_SOURCE";
-            const targetHrid = target?.hrid || "UNKNOWN_TARGET";
-            
-            const afterHp = target?.combatDetails?.currentHitpoints || 0;
-            const beforeHp = Math.max(0, afterHp + damageDone);
-
-            const playersHp = this.players.map(p => ({
-                hrid: p.hrid || "UNKNOWN_PLAYER",
-                current: p.combatDetails?.currentHitpoints ?? 0,
-                max: p.combatDetails?.maxHitpoints ?? 0
-            }));
-            
-            return {
-                time: this.simulationTime,
-                wave: (this.zone.encountersKilled - 1),
-                source: sourceHrid,
-                ability: ability,
-                target: targetHrid,
-                damage: damageDone,
-                beforeHp: beforeHp,
-                afterHp: afterHp,
-                playersHp: playersHp,
-                // enemiesHp: enemiesHp,
-                isCrit: false,
-            };
-        } catch (e) {
-            return {
-                error: `[日志生成错误] ${e.message}`
-            };
-        }
-    }
-
-    generateCombatLog(source, ability, target, attackResult) {
-        try {
-            const sourceHrid = source?.hrid || "UNKNOWN_SOURCE";
-            const targetHrid = target?.hrid || "UNKNOWN_TARGET";
-            const damage = attackResult?.damageDone || 0;
-            
-            const afterHp = target?.combatDetails?.currentHitpoints || 0;
-            const beforeHp = Math.max(0, afterHp + damage);
-
-            const playersHp = this.players.map(p => ({
-                hrid: p.hrid || "UNKNOWN_PLAYER",
-                current: p.combatDetails?.currentHitpoints ?? 0,
-                max: p.combatDetails?.maxHitpoints ?? 0
-            }));
-            
-            return {
-                time: this.simulationTime,
-                wave: (this.zone.encountersKilled - 1),
-                source: sourceHrid,
-                ability: ability,
-                target: targetHrid,
-                damage: damage,
-                beforeHp: beforeHp,
-                afterHp: afterHp,
-                playersHp: playersHp,
-                // enemiesHp: enemiesHp,
-                isCrit: attackResult?.isCrit || false,
-            };
-        } catch (e) {
-            return {
-                error: `[日志生成错误] ${e.message}`
-            };
-        }
-    }
-    
+    // 槽位会被后续战斗复写，所以取出时必须拷贝。团灭很罕见，这点开销无所谓。
     getOrderedWipeLogs() {
         const { buffer, maxSize, count } = this.wipeLogs;
-        const logs = [];
-        
+        const logs = new Array(count);
+
         for (let i = 0; i < count; i++) {
-            const idx = (this.wipeLogs.index - count + maxSize + i) % maxSize;
-            logs.push(buffer[idx]);
+            const slot = buffer[(this.wipeLogs.index - count + maxSize + i) % maxSize];
+            logs[i] = {
+                time: slot.time,
+                wave: slot.wave,
+                source: slot.source,
+                ability: slot.ability,
+                target: slot.target,
+                damage: slot.damage,
+                beforeHp: slot.beforeHp,
+                afterHp: slot.afterHp,
+                playersHp: slot.playersHp.map((entry) => ({ hrid: entry.hrid, current: entry.current, max: entry.max })),
+                isCrit: slot.isCrit,
+                error: slot.error,
+            };
         }
-        
+
         return logs;
     }
 
@@ -621,8 +603,7 @@ class CombatSimulator extends EventTarget {
 
             let attackResult = CombatUtilities.processAttack(source, target);
             if (this.zone?.isDungeon && target.isPlayer && attackResult.didHit && attackResult.damageDone > 0) {
-                const log = this.generateCombatLog(source, "autoAttack", target, attackResult);
-                this.addToWipeLogs(log);
+                this.recordWipeLog(source, "autoAttack", target, attackResult.damageDone || 0, attackResult.isCrit || false);
             }
 
             let mayhem = source.combatDetails.combatStats.mayhem > combatRandom();
@@ -742,16 +723,14 @@ class CombatSimulator extends EventTarget {
                 this.simResult.addAttack(target, source, attackResult.thornType, attackResult.thornDamageDone);
             }
             if (this.zone?.isDungeon && attackResult.thornDamageDone > 0 && source.isPlayer) {
-                const log = this.buildCombatLog(target, attackResult.thornType, source, attackResult.thornDamageDone);
-                this.addToWipeLogs(log);
+                this.recordWipeLog(target, attackResult.thornType, source, attackResult.thornDamageDone, false);
             }
 
             if (target.combatDetails.combatStats.retaliation > 0) {
                 this.simResult.addAttack(target, source, "retaliation", attackResult.retaliationDamageDone > 0?attackResult.retaliationDamageDone:"miss");
             }
             if (this.zone?.isDungeon && attackResult.retaliationDamageDone > 0 && source.isPlayer) {
-                const log = this.buildCombatLog(target, "retaliation", source, attackResult.retaliationDamageDone);
-                this.addToWipeLogs(log);
+                this.recordWipeLog(target, "retaliation", source, attackResult.retaliationDamageDone, false);
             }
 
             if (target.combatDetails.currentHitpoints == 0) {
@@ -1031,8 +1010,7 @@ class CombatSimulator extends EventTarget {
         this.simResult.addAttack(event.sourceRef, event.target, "damageOverTime", damage);
 
         if (this.zone?.isDungeon && event.target.isPlayer) {
-            const log = this.buildCombatLog("", "damageOverTime", event.target, damage);
-            this.addToWipeLogs(log);
+            this.recordWipeLog("", "damageOverTime", event.target, damage, false);
         }
 
         // console.log(event.target.hrid, "bleed for", damage);
@@ -1539,8 +1517,7 @@ class CombatSimulator extends EventTarget {
                 let attackResult = CombatUtilities.processAttack(source, target, abilityEffect);
 
                 if (this.zone?.isDungeon && target.isPlayer && attackResult.didHit && attackResult.damageDone > 0) {
-                    const log = this.generateCombatLog(source, ability.hrid, target, attackResult);
-                    this.addToWipeLogs(log);
+                    this.recordWipeLog(source, ability.hrid, target, attackResult.damageDone || 0, attackResult.isCrit || false);
                 }
 
                 if (attackResult.hpDrain > 0) {
@@ -1708,16 +1685,14 @@ class CombatSimulator extends EventTarget {
                     this.simResult.addAttack(target, source, attackResult.thornType, attackResult.thornDamageDone);
                 }
                 if (this.zone?.isDungeon && attackResult.thornDamageDone > 0 && source.isPlayer) {
-                    const log = this.buildCombatLog(target, attackResult.thornType, source, attackResult.thornDamageDone);
-                    this.addToWipeLogs(log);
+                    this.recordWipeLog(target, attackResult.thornType, source, attackResult.thornDamageDone, false);
                 }
 
                 if (target.combatDetails.combatStats.retaliation > 0) {
                     this.simResult.addAttack(target, source, "retaliation", attackResult.retaliationDamageDone > 0 ? attackResult.retaliationDamageDone : "miss");
                 }
                 if (this.zone?.isDungeon && attackResult.retaliationDamageDone > 0 && source.isPlayer) {
-                    const log = this.buildCombatLog(target, "retaliation", source, attackResult.retaliationDamageDone);
-                    this.addToWipeLogs(log);
+                    this.recordWipeLog(target, "retaliation", source, attackResult.retaliationDamageDone, false);
                 }
 
                 if (target.combatDetails.currentHitpoints == 0) {

@@ -348,20 +348,28 @@ class CombatUnit {
         this.combatDetails.combatStats.tenacity += buffAggregates["/buff_types/tenacity"]?.flatBoost || 0;
     }
 
-    // 一次性遍历所有 buffs，预计算所有类型的聚合值
+    // 一次性遍历所有 buffs，预计算所有类型的聚合值。
+    // updateCombatDetails 在每次 buff 变化时都会调用，是最大的分配源之一：
+    // 这里复用同一个聚合对象并原地归零，稳态下不再分配。
+    // 归零后的条目等价于「没有这个 buff」，所有读取点都以 0 兜底。
     _precomputeBuffAggregates() {
-        const aggregates = {};
-        const buffs = this.combatBuffs;
+        const aggregates = (this._buffAggregates ||= {});
+        for (const key in aggregates) {
+            const entry = aggregates[key];
+            entry.ratioBoost = 0;
+            entry.flatBoost = 0;
+        }
 
+        const buffs = this.combatBuffs;
         for (const key in buffs) {
             const buff = buffs[key];
             const typeHrid = buff.typeHrid;
-
-            if (!aggregates[typeHrid]) {
-                aggregates[typeHrid] = { ratioBoost: 0, flatBoost: 0 };
+            let entry = aggregates[typeHrid];
+            if (!entry) {
+                entry = aggregates[typeHrid] = { ratioBoost: 0, flatBoost: 0 };
             }
-            aggregates[typeHrid].ratioBoost += buff.ratioBoost || 0;
-            aggregates[typeHrid].flatBoost += buff.flatBoost || 0;
+            entry.ratioBoost += buff.ratioBoost || 0;
+            entry.flatBoost += buff.flatBoost || 0;
         }
 
         return aggregates;
