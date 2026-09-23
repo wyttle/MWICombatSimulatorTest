@@ -1,11 +1,8 @@
 // 地下城并行模拟 Worker
 // 将地下城模拟任务按次数分配到多个 Worker 并行执行
 
-import { maxParallelWorkers } from "./workerBudget.js";
-
 const MAX_DUNGEON_SIMULATIONS = 10000;
-// 上限同样受内存约束：每个子 Worker 峰值约 200 MB，详见 workerBudget.js。
-const MAX_PARALLEL_WORKERS = maxParallelWorkers(32);
+const MAX_PARALLEL_WORKERS = 32;
 
 // 独立的合并函数，用于合并从 Worker 返回的普通对象（非 SimResult 实例）
 // 因为 Web Worker 的 postMessage 会将对象序列化为 JSON，丢失类方法

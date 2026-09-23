@@ -6,7 +6,7 @@ import { comparePaired, seedList } from "./stats.js";
 import { priceChanges, priceConsumableDelta } from "./cost.js";
 import { listEquipmentCandidates, buildChange, applyChanges, validateChanges, generateUpgradeCandidates } from "./candidates.js";
 import { scanThresholds, estimateScanBudget } from "./search.js";
-import { WORKER_PEAK_MB, maxParallelWorkers } from "../workerBudget.js";
+import { WORKER_PEAK_MB } from "../workerBudget.js";
 
 const EQUIPMENT_SLOTS = ["head", "body", "legs", "feet", "hands", "main_hand", "two_hand", "off_hand", "pouch", "neck", "earrings", "ring", "back", "charm"].map((slot) => `/equipment_types/${slot}`);
 
@@ -852,9 +852,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             ui.optSelectDungeon.value = snapshot.zone.zoneHrid;
             ui.optSelectDifficulty.value = String(snapshot.zone.difficultyTier);
             ui.optInputDungeonCount.value = String(snapshot.dungeonCount);
-            const parallelMax = maxParallelWorkers(snapshot.parallelMax);
-            ui.optInputParallelCount.max = String(parallelMax);
-            ui.optInputParallelCount.value = String(Math.max(1, Math.min(snapshot.parallelCount, parallelMax)));
+            ui.optInputParallelCount.max = String(snapshot.parallelMax);
+            ui.optInputParallelCount.value = String(snapshot.parallelCount);
             ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value;
             updateMemoryEstimate();
             ui.optProgress.classList.add("d-none");
