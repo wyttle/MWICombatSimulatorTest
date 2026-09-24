@@ -5,6 +5,8 @@
         "selectPlayer": "Select Player",
         "applied": "Simulation configuration applied",
         "exported": "Report exported",
+        "imported": "Report imported and saved to history",
+        "importReport": "Import report",
         "open": "Team Optimizer",
         "runningBadge": "Optimizer running",
         "history": {
@@ -221,7 +223,8 @@
             "running": "A simulation is already running.",
             "rosterMismatch": "This report's players are not in the current roster, so it cannot be loaded.",
             "invalidSettings": "Enter valid positive integer settings and valid threshold ranges.",
-            "invalidCandidate": "The candidate configuration is invalid."
+            "invalidCandidate": "The candidate configuration is invalid.",
+            "invalidReport": "This is not a report exported by the optimizer."
         }
     },
     "title": "MWI Combat Simulator",
@@ -335,6 +338,7 @@
     "solo": "Solo",
     "or": "OR",
     "import": "Import",
+    "importInvalidTeam": "Not a team export: paste the team JSON from Export, or a report JSON exported by the optimizer.",
     "exportGroupSolo": "Export Group/Solo",
     "noWipeEvents": "No Wipe Events",
     "noWipeEventsDetected": "No Wipe Events Detected",

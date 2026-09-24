@@ -21,6 +21,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     ui.optInputSearchCount = document.getElementById("optInputSearchCount");
     ui.optRunningBadge = document.getElementById("optRunningBadge");
+    ui.optButtonImport = document.getElementById("optButtonImport");
+    ui.optInputImportReport = document.getElementById("optInputImportReport");
     ui.optSelectSearchMethod = document.getElementById("optSelectSearchMethod");
     ui.optInputReuseSamples = document.getElementById("optInputReuseSamples");
     const modal = ui.optimizerModal;
@@ -824,6 +826,43 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         if (latest && !report && !running) showReport(latest);
     }
 
+    // 导出的报告 JSON 可以在任何浏览器里导回来：补齐旧版本缺少的字段，另起编号存入历史并直接展示。
+    function normalizeImportedReport(raw) {
+        const players = raw?.draftTeamState?.players;
+        if (!Array.isArray(players) || !players.length || (!Array.isArray(raw.results) && !raw.scan)) throw new Error("不是优化器报告");
+        const now = Date.now();
+        return {
+            ...raw,
+            id: `import-${now.toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+            kind: raw.kind ?? (raw.scan ? "scan" : "triggers"),
+            status: raw.status ?? "done",
+            createdAt: raw.createdAt ?? raw.finishedAt ?? now,
+            finishedAt: raw.finishedAt ?? now,
+            activeIds: raw.activeIds ?? players.map((player) => String(player.id)),
+            results: raw.results ?? [],
+            imported: true,
+        };
+    }
+
+    async function importReport(raw) {
+        if (running) return status("errors.running");
+        let imported;
+        try {
+            imported = normalizeImportedReport(raw);
+        } catch (error) {
+            console.error(error);
+            return status("errors.invalidReport");
+        }
+        try {
+            await saveReport(imported);
+        } catch (error) {
+            // 存不进历史也照样展示；刷新后就没了。
+            console.error("优化器报告保存失败", error);
+        }
+        showReport(imported);
+        status("imported");
+    }
+
     async function renderHistory() {
         let reports;
         try {
@@ -1328,6 +1367,24 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         window.setTimeout(() => URL.revokeObjectURL(url), 0);
         status("exported");
     });
+    ui.optButtonImport.addEventListener("click", () => {
+        if (running) return status("errors.running");
+        ui.optInputImportReport.click();
+    });
+    ui.optInputImportReport.addEventListener("change", async () => {
+        const [file] = ui.optInputImportReport.files ?? [];
+        ui.optInputImportReport.value = "";
+        if (!file) return;
+        let raw;
+        try {
+            raw = JSON.parse(await file.text());
+        } catch (error) {
+            console.error(error);
+            return status("errors.invalidReport");
+        }
+        await importReport(raw);
+    });
     updateActions();
     void resumePending();
+    return { importReport };
 }

@@ -5,6 +5,8 @@
         "selectPlayer": "选择玩家",
         "applied": "已应用模拟配置",
         "exported": "报告已导出",
+        "imported": "报告已导入并存入历史",
+        "importReport": "导入报告",
         "open": "队伍优化器",
         "runningBadge": "优化器运行中",
         "history": {
@@ -221,7 +223,8 @@
             "running": "模拟正在进行中。",
             "rosterMismatch": "这份报告的参战队员不在当前主界面名单中，无法载入。",
             "invalidSettings": "模拟设置须为有效正整数，阈值范围须有效。",
-            "invalidCandidate": "候选方案配置不合法。"
+            "invalidCandidate": "候选方案配置不合法。",
+            "invalidReport": "不是优化器导出的报告文件。"
         }
     },
     "title": "MWI 战斗模拟器",
@@ -334,6 +337,7 @@
     "solo": "单人",
     "or": "或",
     "import": "导入",
+    "importInvalidTeam": "不是队伍导出数据：请粘贴「导出」得到的队伍 JSON，或优化器导出的报告 JSON。",
     "exportGroupSolo": "导出",
     "noWipeEvents": "无团灭事件",
     "noWipeEventsDetected": "未检测到团灭事件",

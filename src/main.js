@@ -4184,21 +4184,29 @@ function doGroupImport() {
         setGuildShrineLevels(importedGuildShrineLevels);
     } else {
         const groupImport = JSON.parse(value);
-        if (groupImport.players) {
+        if (Array.isArray(groupImport.draftTeamState?.players)) {
+            // 粘贴的是优化器导出的报告：主界面载入报告里的最优队伍，报告本身交给优化器展示。
+            const teamState = groupImport.results?.[0]?.teamState ?? groupImport.scan?.bestTeamState ?? groupImport.draftTeamState;
+            playerDataMap = teamStateToPlayerDataMap(teamState);
+            setGuildShrineLevels(groupImport.settings?.guildShrineLevels);
+            void optimizer.importReport(groupImport);
+        } else if (groupImport.players) {
             playerDataMap = groupImport.players;
             setGuildShrineLevels(groupImport.guildShrineLevels);
         } else {
+            const playerStates = Object.values(groupImport).map((playerJson) => {
+                try {
+                    return JSON.parse(playerJson);
+                } catch {
+                    return null;
+                }
+            });
+            // 不是队伍导出格式时立刻报错，否则会把无法解析的数据写进队员列表，之后每次切换标签页都会出错。
+            if (!playerStates.length || !playerStates.every((playerState) => playerState?.player)) {
+                throw new Error(i18next.t("common:importInvalidTeam"));
+            }
             playerDataMap = groupImport;
-            const firstPlayerState = Object.values(groupImport)
-                .map((playerJson) => {
-                    try {
-                        return JSON.parse(playerJson);
-                    } catch {
-                        return null;
-                    }
-                })
-                .find((playerState) => playerState?.guildShrineLevels);
-            setGuildShrineLevels(firstPlayerState?.guildShrineLevels);
+            setGuildShrineLevels(playerStates.find((playerState) => playerState.guildShrineLevels)?.guildShrineLevels);
         }
         needUpdateCurrentTab = true;
     }
@@ -4970,7 +4978,7 @@ function isImportedPlayer(id) {
     }
 }
 
-initOptimizer({
+const optimizer = initOptimizer({
     getTeamSnapshot() {
         savePreviousPlayer(currentPlayerTabId);
         const boxes = Array.from(document.querySelectorAll(".player-checkbox"));
