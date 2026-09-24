@@ -10,9 +10,11 @@ import { optimizeThresholds, estimateBayesBudget, batchSizeFor } from "./bayes.j
 import { WORKER_PEAK_MB } from "../workerBudget.js";
 import { resolveScanVariables } from "./ranges.js";
 import { renderSearchAnalysis } from "./searchPlot.js";
-import { clearReports, deleteReport, deleteRun, jobKey, listReports, listRuns, loadSamples, saveReport, saveRun, saveSample } from "./store.js";
+import { clearReports, deleteReport, deleteRun, jobKey, listReports, listRuns, loadSamples, pruneSamples, saveReport, saveRun, saveSample } from "./store.js";
 
 const EQUIPMENT_SLOTS = ["head", "body", "legs", "feet", "hands", "main_hand", "two_hand", "off_hand", "pouch", "neck", "earrings", "ring", "back", "charm"].map((slot) => `/equipment_types/${slot}`);
+// 探索 seed 固定：同一队伍、同一设置下跨运行复用已测配置的样本。最终验证仍用每次随机的 seed。
+const EXPLORATION_SEED = 0x4d574921;
 
 export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices }) {
     const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optMemoryEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTabHistory", "optHistory", "optButtonClearHistory", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
@@ -20,6 +22,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     ui.optInputSearchCount = document.getElementById("optInputSearchCount");
     ui.optRunningBadge = document.getElementById("optRunningBadge");
     ui.optSelectSearchMethod = document.getElementById("optSelectSearchMethod");
+    ui.optInputReuseSamples = document.getElementById("optInputReuseSamples");
     const modal = ui.optimizerModal;
     let snapshot = null;
     let originalTeamState = null;
@@ -497,6 +500,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             seedCount: integer(ui.optInputSeedCount),
             maxEvaluations: integer(ui.optInputMaxEvaluations),
             searchMethod: ui.optSelectSearchMethod.value === "coordinate" ? "coordinate" : "bayes",
+            reuseSamples: ui.optInputReuseSamples.checked,
             extra: structuredClone(snapshot.extra),
             guildShrineLevels: structuredClone(snapshot.guildShrineLevels),
         };
@@ -703,7 +707,14 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             ui.optResults.append(card);
         }
         if (report?.scan) {
-            ui.optResults.append(label("scanEvaluations", "d-block", { count: report.scan.evaluations }));
+            ui.optResults.append(label("scanEvaluations", "d-block", { count: format(report.scan.evaluations, 1) }));
+            if (report.scan.method === "bayes") {
+                const details = element("div", "small text-muted");
+                details.append(label("scanConfigurations", "me-2", { count: format(report.scan.configurations ?? report.scan.history.length, 0) }));
+                if (report.scan.racing) details.append(label("scanRacing", "me-2", { stage: report.scan.racing.stageSeeds, total: report.scan.seedCount, promoted: format(report.scan.racing.promoted, 0) }));
+                if (report.scan.reusedEvaluations > 0) details.append(label("scanReused", "", { count: format(report.scan.reusedEvaluations, 1) }));
+                ui.optResults.append(details);
+            }
             ui.optResults.append(label(`searchStop.${report.scan.stopReason ?? "running"}`, "d-block text-muted mb-2"));
             for (const [index, variable] of report.scan.variables.entries()) {
                 const value = report.scan.bestValues?.[index];
@@ -883,12 +894,13 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             return status("errors.invalidCandidate");
         }
         const masterSeed = window.crypto.getRandomValues(new Uint32Array(1))[0];
+        const explorationSeed = EXPLORATION_SEED;
         // 计划包含运行所需的全部输入，同时作为检查点：页面关闭后按同一计划重放，已完成的 seed 直接取缓存。
         await execute({
             id: `${Date.now().toString(36)}-${masterSeed.toString(36)}`,
             kind: scan ? "scan" : equipmentRun ? "upgrades" : "triggers",
             createdAt: Date.now(),
-            settings, scanVariables, masterSeed, teams,
+            settings, scanVariables, masterSeed, explorationSeed, teams,
             originalTeamState: cloneTeamState(originalTeamState),
             draftTeamState: cloneTeamState(draftTeamState),
             activeIds: [...activeIds],
@@ -931,26 +943,29 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         const signal = controller.signal;
         setRunning(true);
         setProgress(0);
-        const seeds = seedList(masterSeed, settings.seedCount);
+        // 旧版检查点没有 explorationSeed，续跑时沿用原来的派生方式才能命中同一批 seed。
+        const explorationSeeds = scan && plan.explorationSeed !== undefined ? seedList(plan.explorationSeed, settings.seedCount) : null;
+        const seeds = explorationSeeds ?? seedList(masterSeed, settings.seedCount);
         report = {
             id: plan.id, kind: plan.kind, createdAt: plan.createdAt, activeIds: plan.activeIds,
             settings, masterSeed, seeds, originalTeamState: cloneTeamState(baselineTeam), draftTeamState: cloneTeamState(plan.draftTeamState),
             baselineSamples: [], results, scan: null, status: "running", resumed,
         };
         updateActions();
-        let memo = new Map();
+        // 运行内的样本缓存；跨运行的缓存放在 IndexedDB，按需读取。
+        const memo = new Map();
+        let storage = true;
         try {
-            if (resumed) {
-                memo = await loadSamples(plan.id);
-            } else {
-                await saveRun(plan);
-            }
+            if (!resumed) await saveRun(plan);
         } catch (error) {
-            // 存储不可用时照常运行，只是关闭页面后无法续跑。
+            // 存储不可用时照常运行，只是关闭页面后无法续跑，也不能复用样本。
             console.error(error);
             report.persistenceError = String(error);
+            storage = false;
         }
-        status(resumed ? "status.resumed" : "status.pricing", resumed ? { done: memo.size } : undefined);
+        const readCache = storage && (resumed || settings.reuseSamples !== false);
+        let reusedSeedRuns = 0;
+        status(resumed ? "status.resumed" : "status.pricing");
         try {
             runner = new EvaluationRunner({ concurrency: settings.concurrency });
             let prices;
@@ -965,18 +980,43 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             signal.throwIfAborted();
             status("status.running", { done: 0, total: seeds.length });
             const validationSeeds = scan
-                ? seedList(masterSeed, settings.seedCount * 2).slice(settings.seedCount)
+                ? (explorationSeeds
+                    ? seedList(masterSeed, settings.seedCount * 2).filter((seed) => !explorationSeeds.includes(seed)).slice(0, settings.seedCount)
+                    : seedList(masterSeed, settings.seedCount * 2).slice(settings.seedCount))
                 : seeds;
             report.validationSeeds = validationSeeds;
             // 已缓存的 seed 不再模拟；搜索只依赖样本，重放同一计划会走出完全相同的路径。
-            const evaluateBatch = async (teamStates, { start, width, exploration = false, onResult }) => {
+            // subset 给定时只评估这些 seed（分级评估的第一阶段或补跑）。
+            const evaluateBatch = async (teamStates, { start, width, exploration = false, onResult, subset = null }) => {
                 const dungeonCount = exploration ? settings.searchDungeonCount : settings.dungeonCount;
-                const jobSeeds = exploration ? seeds : validationSeeds;
+                const allSeeds = exploration ? seeds : validationSeeds;
+                const jobSeeds = subset ? allSeeds.filter((seed) => subset.includes(seed)) : allSeeds;
                 const jobs = teamStates.map((teamState) => {
                     const players = teamStateToDTOs(teamState);
-                    const key = jobKey({ players, dungeonCount });
+                    const key = jobKey({ players, dungeonCount, zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels });
                     return { players, key, samples: jobSeeds.map((seed) => memo.get(`${key}|${seed}`) ?? null) };
                 });
+                if (readCache) {
+                    await Promise.all(jobs.map(async (job) => {
+                        if (job.samples.every(Boolean)) return;
+                        let cached;
+                        try {
+                            cached = await loadSamples(job.key);
+                        } catch (error) {
+                            console.error(error);
+                            return;
+                        }
+                        jobSeeds.forEach((seed, position) => {
+                            const sample = cached.get(seed);
+                            if (!sample || job.samples[position]) return;
+                            job.samples[position] = sample;
+                            memo.set(`${job.key}|${seed}`, sample);
+                            if (exploration) reusedSeedRuns++;
+                        });
+                    }));
+                    signal.throwIfAborted();
+                    if (report.scan) report.scan.reusedEvaluations = Math.round(reusedSeedRuns / seeds.length * 100) / 100;
+                }
                 const output = jobs.map((job) => job.samples.every(Boolean) ? job.samples : null);
                 output.forEach((samples, index) => { if (samples) onResult?.(index, samples); });
                 const pending = jobs.map((job, index) => ({ job, index, seeds: jobSeeds.filter((_, position) => !job.samples[position]) }))
@@ -989,7 +1029,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                         const seed = missing[seedIndex];
                         memo.set(`${job.key}|${seed}`, sample);
                         job.samples[jobSeeds.indexOf(seed)] = sample;
-                        if (!report.persistenceError) persist(saveSample(plan.id, job.key, seed, sample));
+                        if (storage) persist(saveSample(job.key, seed, sample));
                     },
                     onResult: (position) => {
                         const { job, index } = pending[position];
@@ -1008,17 +1048,17 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 let evaluations = 0;
                 // 旧版检查点没有 searchMethod，续跑时按坐标搜索重放才能命中缓存样本。
                 const bayes = settings.searchMethod === "bayes";
-                report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, stopReason: "running", ...(bayes ? { method: "bayes", modelSlices: [] } : {}) };
+                report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, reusedEvaluations: 0, stopReason: "running", ...(bayes ? { method: "bayes", modelSlices: [], seedCount: seeds.length } : {}) };
                 updateActions();
                 const search = await (bayes ? optimizeThresholds : scanThresholds)({
                     teamState: cloneTeamState(plan.draftTeamState), variables: scanVariables,
-                    evaluateBatch: (teamStates, onResult) => evaluateBatch(teamStates, {
+                    evaluateBatch: (teamStates, onResult, subset) => evaluateBatch(teamStates, {
                         start: 80 * evaluations / settings.maxEvaluations,
-                        width: 80 * teamStates.length / settings.maxEvaluations,
-                        exploration: true, onResult,
+                        width: 80 * (subset ? subset.length / seeds.length : 1) * teamStates.length / settings.maxEvaluations,
+                        exploration: true, onResult, subset,
                     }),
                     seeds, maxEvaluations: settings.maxEvaluations, signal,
-                    batchSize: batchSizeFor(settings.concurrency, settings.seedCount),
+                    batchSize: batchSizeFor(settings.concurrency, settings.seedCount), concurrency: settings.concurrency,
                     onProgress: (progress) => {
                         evaluations = progress.evaluations;
                         report.scan.evaluations = evaluations;
@@ -1029,7 +1069,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                     },
                 });
                 signal.throwIfAborted();
-                report.scan = { ...search, variables: scanVariables };
+                report.scan = { ...search, variables: scanVariables, reusedEvaluations: report.scan.reusedEvaluations };
                 report.draftTeamState = cloneTeamState(search.bestTeamState);
                 teams = [cloneTeamState(search.bestTeamState)];
                 // 仍是同一批参战队员时，把最优阈值带回触发条件页继续编辑。
@@ -1096,6 +1136,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             persist(saveReport(finished)
                 .catch((error) => console.error("优化器报告保存失败", error))
                 .then(() => deleteRun(plan.id))
+                .then(() => pruneSamples())
                 .then(renderHistory));
             if (results.length || report.scan) {
                 renderResults();

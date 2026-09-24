@@ -1476,6 +1476,16 @@
                                 </div>
                             </div>
                             <div class="row mb-1">
+                                <div class="col-md-3"></div>
+                                <div class="col-md">
+                                    <div class="form-check">
+                                        <input type="checkbox" id="optInputReuseSamples" class="form-check-input" checked />
+                                        <label for="optInputReuseSamples" class="form-check-label" data-i18n="common:optimizer.reuseSamples">Reuse earlier evaluations</label>
+                                    </div>
+                                    <small class="text-muted" data-i18n="common:optimizer.reuseSamplesHint">Exploration uses a fixed seed set, so configurations already simulated for this team, dungeon and settings are read from browser storage instead of being simulated again. Final validation always uses fresh seeds.</small>
+                                </div>
+                            </div>
+                            <div class="row mb-1">
                                 <label for="optInputMaxEvaluations" class="col-md-3 col-form-label" data-i18n="common:optimizer.maxEvaluations">Maximum evaluations</label>
                                 <div class="col-md">
                                     <input type="number" id="optInputMaxEvaluations" class="form-control" min="5" max="500" value="60" required />

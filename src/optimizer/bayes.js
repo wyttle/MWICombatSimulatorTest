@@ -66,7 +66,7 @@ function gaussian(random) {
 // 自动范围可达 -100～129100，而关键结构集中在几千以内；不扭曲的话平稳核会把这些区域压成一个点。
 function createAxis(variable) {
     const inside = (value) => Number.isFinite(value) && value > variable.min && value < variable.max;
-    const knots = [...new Set([variable.min, variable.max, ...(variable.suggestedPoints ?? []).filter(inside)])].sort((a, b) => a - b);
+    const knots = [...new Set([variable.min, variable.max, ...(variable.warpPoints ?? variable.suggestedPoints ?? []).filter(inside)])].sort((a, b) => a - b);
     const segments = Math.max(1, knots.length - 1);
     const gridCount = Math.floor((variable.max - variable.min) / variable.step);
     const gridValue = (index) => Number((variable.min + index * variable.step).toPrecision(15));
@@ -157,7 +157,8 @@ function backSolve(lower, size, vector) {
     return result;
 }
 
-function factorize(points, params) {
+// noiseScale[i]：该观测相对完整 seed 评估的噪声倍数（只跑了 1/4 的 seed 就是 4），分级评估靠它区分点的可信度。
+function factorize(points, params, noiseScale) {
     const size = points.length;
     const inverseSquares = params.lengthscales.map((scale) => 1 / (scale * scale));
     let jitter = 1e-9;
@@ -169,17 +170,17 @@ function factorize(points, params) {
                 matrix[i * size + j] = value;
                 matrix[j * size + i] = value;
             }
-            matrix[i * size + i] += params.noise + jitter * params.signal;
+            matrix[i * size + i] += params.noise * (noiseScale ? noiseScale[i] : 1) + jitter * params.signal;
         }
         if (cholesky(matrix, size)) return { lower: matrix, size, inverseSquares };
     }
     throw new Error("高斯过程协方差矩阵无法分解");
 }
 
-function buildModel(points, targets, params) {
-    const { lower, size, inverseSquares } = factorize(points, params);
+function buildModel(points, targets, params, noiseScale) {
+    const { lower, size, inverseSquares } = factorize(points, params, noiseScale);
     const alpha = backSolve(lower, size, forwardSolve(lower, size, targets));
-    return { points, lower, size, inverseSquares, alpha, params };
+    return { points, lower, size, inverseSquares, alpha, params, targets, noiseScale };
 }
 
 function predict(model, point, withVariance = true) {
@@ -198,7 +199,7 @@ function predict(model, point, withVariance = true) {
 }
 
 // 带先验的负对数边际似然（MAP）：点数少时防止长度尺度或噪声跑到退化值。
-function negativeLogPosterior(theta, points, targets, noisePrior) {
+function negativeLogPosterior(theta, points, targets, noiseScale, noisePrior) {
     const dimensions = points[0].length;
     const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
     const logScales = theta.slice(0, dimensions).map((value) => clamp(value, Math.log(0.01), Math.log(20)));
@@ -206,7 +207,7 @@ function negativeLogPosterior(theta, points, targets, noisePrior) {
     const logNoise = clamp(theta[dimensions + 1], Math.log(1e-6), Math.log(10));
     let factor;
     try {
-        factor = factorize(points, { lengthscales: logScales.map(Math.exp), signal: Math.exp(logSignal), noise: Math.exp(logNoise) });
+        factor = factorize(points, { lengthscales: logScales.map(Math.exp), signal: Math.exp(logSignal), noise: Math.exp(logNoise) }, noiseScale);
     } catch {
         return Number.POSITIVE_INFINITY;
     }
@@ -337,7 +338,14 @@ export function estimateBayesBudget(variables) {
     return Math.min(500, 12 * variables.length + 12);
 }
 
-export async function optimizeThresholds({ teamState, variables, evaluateBatch, seeds, maxEvaluations, batchSize = 1, signal, onProgress }) {
+// 分级评估：seed 足够多时，候选先只跑一半的 seed，模型认为仍有机会超过当前最优的才补跑其余 seed。
+function stageSplit(seeds) {
+    if (seeds.length < 4) return { first: seeds, rest: [] };
+    const count = Math.ceil(seeds.length / 2);
+    return { first: seeds.slice(0, count), rest: seeds.slice(count) };
+}
+
+export async function optimizeThresholds({ teamState, variables, evaluateBatch, seeds, maxEvaluations, batchSize = 1, concurrency = null, signal, onProgress }) {
     if (!Array.isArray(variables) || !variables.length) throw new Error("没有可扫描的触发条件");
     if (!Number.isInteger(maxEvaluations) || maxEvaluations < 1) throw new Error("最大评估次数必须是正整数");
     if (!Array.isArray(seeds) || !seeds.length || new Set(seeds).size !== seeds.length ||
@@ -358,14 +366,18 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
         if (!Number.isFinite(value)) throw new Error("触发条件数值无效");
         return value;
     });
-    const expectedSeeds = new Set(seeds);
-    const checkSamples = (samples) => {
-        if (!Array.isArray(samples) || samples.length !== seeds.length ||
-            new Set(samples.map((sample) => sample.seed)).size !== seeds.length ||
-            samples.some((sample) => !expectedSeeds.has(sample.seed))) throw new Error("扫描样本 seed 不匹配");
+    const { first: stageSeeds, rest: restSeeds } = stageSplit(seeds);
+    const racing = restSeeds.length > 0;
+    const checkSamples = (samples, expected) => {
+        const wanted = new Set(expected);
+        if (!Array.isArray(samples) || samples.length !== expected.length ||
+            new Set(samples.map((sample) => sample.seed)).size !== expected.length ||
+            samples.some((sample) => !wanted.has(sample.seed))) throw new Error("扫描样本 seed 不匹配");
         return samples;
     };
     const batch = Math.max(1, Math.min(MAX_BATCH, Math.floor(batchSize) || 1));
+    // 第一阶段每个候选只占少量线程，一批可以多提几个候选把线程填满。
+    const stageBatch = racing && concurrency ? batchSizeFor(concurrency, stageSeeds.length) : batch;
     const random = createRandom(seeds);
     const axes = variables.map(createAxis);
     const dimensions = variables.length;
@@ -375,43 +387,64 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
     const history = [];
     const cache = new Set();
     let baseline = null;
-    const report = (historyEntry) => onProgress?.({
-        evaluations: history.length, maxEvaluations, entry: null, historyEntry, context: null,
+    // 预算按 seed 场次折算成评估次数：只跑 4/16 个 seed 的候选计 0.25 次。
+    let spent = 0;
+    const spentRounded = () => Math.round(spent * 100) / 100;
+    const baselineFor = (samples) => {
+        const wanted = new Set(samples.map((sample) => sample.seed));
+        return baseline.filter((sample) => wanted.has(sample.seed));
+    };
+    const isFull = (entry) => entry.samples.length === seeds.length;
+    const rawBest = () => history.reduce((best, entry) => isFull(entry) && entry.comparison.deltaDps > best.comparison.deltaDps ? entry : best, history[0]);
+    const report = (historyEntry, updatedEntry) => onProgress?.({
+        evaluations: spentRounded(), maxEvaluations, entry: null, historyEntry, updatedEntry, context: null,
         bestValues: [...rawBest().values],
     });
-    const rawBest = () => history.reduce((best, entry) => entry.comparison.deltaDps > best.comparison.deltaDps ? entry : best, history[0]);
 
     // 同一批配置并行评估，结果按提交顺序写入历史，保证续跑重放时编号一致。
-    const evaluateAll = async (configs, phase) => {
+    // existing 给定时是补跑：新样本并入已有记录，配对比较按全部样本重算。
+    const evaluateAll = async (configs, phase, subset = seeds, existing = null) => {
         checkAbort(signal);
         const completed = new Array(configs.length);
+        const created = [];
         let cursor = 0;
         const flush = () => {
             while (cursor < configs.length && completed[cursor]) {
-                const samples = completed[cursor];
-                if (!baseline) baseline = samples;
-                const entry = {
-                    id: `evaluation-${history.length}`, values: configs[cursor], samples,
-                    comparison: comparePaired(baseline, samples),
-                    contextId: null, variableIndex: null, value: null, step: null, phase,
-                };
-                history.push(entry);
-                cache.add(JSON.stringify(configs[cursor]));
-                report(entry);
+                const fresh = completed[cursor];
+                let entry;
+                if (existing) {
+                    entry = existing[cursor];
+                    entry.samples = [...entry.samples, ...fresh];
+                    entry.comparison = comparePaired(baselineFor(entry.samples), entry.samples);
+                    entry.phase = phase;
+                } else {
+                    if (!baseline) baseline = fresh;
+                    entry = {
+                        id: `evaluation-${history.length}`, values: configs[cursor], samples: fresh,
+                        comparison: comparePaired(baselineFor(fresh), fresh),
+                        contextId: null, variableIndex: null, value: null, step: null, phase,
+                    };
+                    history.push(entry);
+                    created.push(entry);
+                    cache.add(JSON.stringify(configs[cursor]));
+                }
+                spent += subset.length / seeds.length;
+                report(existing ? null : entry, entry);
                 cursor++;
             }
         };
         const results = await evaluateBatch(configs.map((values) => withValues(original, variables, values)), (index, samples) => {
-            completed[index] = checkSamples(samples);
+            completed[index] = checkSamples(samples, subset);
             flush();
-        });
+        }, subset);
         checkAbort(signal);
         if (!Array.isArray(results) || results.length !== configs.length) throw new Error("批量评估结果数量不匹配");
-        results.forEach((samples, index) => { completed[index] ??= checkSamples(samples); });
+        results.forEach((samples, index) => { completed[index] ??= checkSamples(samples, subset); });
         flush();
+        return created;
     };
 
-    await evaluateAll([originalValues], "baseline");
+    await evaluateAll([originalValues], "baseline", seeds);
 
     // 初始设计：在扭曲空间做拉丁超立方，覆盖每个阈值的各个尺度区段。
     const initialCount = Math.min(maxEvaluations - 1, Math.max(Math.min(2 * dimensions, 20), Math.min(6, maxEvaluations - 1)));
@@ -432,23 +465,48 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
             initial.push(values);
         }
     }
-    if (initial.length) await evaluateAll(initial, "initial");
-
     let params = null;
     let fittedAt = 0;
     let model = null;
     let scale = { mean: 0, sd: 1 };
+
+    // 第一阶段结束后：与当前最优（只看完整评估过的配置）比较后验，明显更差的不再补跑。
+    // 不能盲目补跑一批中的最好者：整批都远差于最优时补跑纯属浪费。
+    const promote = async (entries) => {
+        if (!racing || !entries.length) return;
+        await refit(false);
+        const incumbent = history.filter(isFull)
+            .map((entry) => predict(model, encode(entry.values)))
+            .reduce((best, item) => item.mean > best.mean ? item : best);
+        const scored = entries.map((entry) => ({ entry, ...predict(model, encode(entry.values)) }))
+            .sort((a, b) => b.mean - a.mean);
+        const chosen = [];
+        scored.forEach((item, rank) => {
+            const z = (item.mean - incumbent.mean) / Math.sqrt(item.sd * item.sd + incumbent.sd * incumbent.sd + 1e-12);
+            if (z > -1 || (rank === 0 && z > -2)) chosen.push(item.entry);
+        });
+        const affordable = Math.floor((maxEvaluations - spent) * seeds.length / restSeeds.length + 1e-9);
+        const promoted = chosen.slice(0, Math.max(0, affordable));
+        if (promoted.length) await evaluateAll(promoted.map((entry) => entry.values), "promotion", restSeeds, promoted);
+    };
 
     const observations = () => {
         const deltas = history.map((entry) => entry.comparison.deltaDps);
         const mean = deltas.reduce((sum, value) => sum + value, 0) / deltas.length;
         const variance = deltas.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, deltas.length - 1);
         const sd = variance > 1e-12 ? Math.sqrt(variance) : 1;
-        const variances = history.slice(1).map((entry) => pairedVariance(baseline, entry.samples)).filter((value) => value !== null);
+        // 配对方差折算成完整 seed 数下的均值方差，作为噪声先验；部分评估的点按 seed 数放大噪声。
+        const variances = history.slice(1)
+            .map((entry) => {
+                const value = pairedVariance(baselineFor(entry.samples), entry.samples);
+                return value === null ? null : value * entry.samples.length / seeds.length;
+            })
+            .filter((value) => value !== null);
         const pooled = variances.length ? median(variances) : 0;
         return {
             points: history.map((entry) => encode(entry.values)),
             targets: Float64Array.from(deltas, (value) => (value - mean) / sd),
+            noiseScale: history.map((entry) => seeds.length / entry.samples.length),
             scale: { mean, sd },
             noisePrior: Math.max(1e-6, pooled / (sd * sd)),
         };
@@ -462,6 +520,7 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
         if (force || !params || count < 30 || count >= fittedAt * 1.2) {
             let fitPoints = data.points;
             let fitTargets = data.targets;
+            let fitNoise = data.noiseScale;
             if (count > MAX_FIT_POINTS) {
                 // 拟合只用子集：最好的一部分加按序号均匀抽取的其余点，确定性选择以便重放。
                 const ranked = [...data.targets.keys()].sort((a, b) => data.targets[b] - data.targets[a]);
@@ -472,8 +531,9 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
                 const indices = [...chosen].sort((a, b) => a - b);
                 fitPoints = indices.map((index) => data.points[index]);
                 fitTargets = Float64Array.from(indices, (index) => data.targets[index]);
+                fitNoise = indices.map((index) => data.noiseScale[index]);
             }
-            const objective = (theta) => negativeLogPosterior(theta, fitPoints, fitTargets, data.noisePrior);
+            const objective = (theta) => negativeLogPosterior(theta, fitPoints, fitTargets, fitNoise, data.noisePrior);
             const defaults = [...new Array(dimensions).fill(Math.log(0.25)), 0, Math.log(data.noisePrior)];
             const starts = params ? [[...params.lengthscales.map(Math.log), Math.log(params.signal), Math.log(params.noise)], defaults] : [defaults];
             let best = null;
@@ -494,12 +554,14 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
             };
             fittedAt = count;
         }
-        model = { ...buildModel(data.points, data.targets, params), targets: data.targets };
+        model = buildModel(data.points, data.targets, params, data.noiseScale);
     };
 
     const posteriorRanking = () => history
         .map((entry, index) => ({ entry, index, ...predict(model, model.points[index]) }))
         .sort((a, b) => b.mean - a.mean || a.index - b.index);
+
+    if (initial.length) await promote(await evaluateAll(initial, "initial", stageSeeds));
 
     // 候选池：全局随机 + 围绕后验最优点的局部扰动（按相关性挑维度，同时改 1～3 个阈值）+ 最优点逐维 ±1/±2 网格。
     const candidatePool = (size, exclude) => {
@@ -558,13 +620,15 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
     };
 
     let stopReason = "bayesBudget";
-    while (history.length < maxEvaluations) {
+    const stageCost = stageSeeds.length / seeds.length;
+    while (spent + stageCost <= maxEvaluations + 1e-9) {
         checkAbort(signal);
         await refit(false);
-        const count = Math.min(batch, maxEvaluations - history.length);
+        const count = Math.min(stageBatch, Math.floor((maxEvaluations - spent) / stageCost + 1e-9));
         const chosen = [];
         const fantasyPoints = [...model.points];
         const fantasyTargets = Array.from(model.targets);
+        const fantasyNoise = [...model.noiseScale];
         let fantasyModel = model;
         const pool = candidatePool(Math.max(300, Math.min(2000, Math.floor(6e7 / (model.size * model.size + 1)))), cache);
         if (!pool.length) {
@@ -590,17 +654,19 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
                 const point = encode(values);
                 fantasyPoints.push(point);
                 fantasyTargets.push(predict(fantasyModel, point, false).mean);
-                fantasyModel = buildModel(fantasyPoints, Float64Array.from(fantasyTargets), params);
+                fantasyNoise.push(1);
+                fantasyModel = buildModel(fantasyPoints, Float64Array.from(fantasyTargets), params, fantasyNoise);
                 await yieldToEventLoop();
                 checkAbort(signal);
             }
         }
-        await evaluateAll(chosen, "acquisition");
+        await promote(await evaluateAll(chosen, "acquisition", stageSeeds));
     }
 
     checkAbort(signal);
     await refit(true);
-    const ranking = posteriorRanking();
+    // 只在完整评估过的配置里选：部分评估的点噪声更大，不能当最优方案交付。
+    const ranking = posteriorRanking().filter((item) => isFull(item.entry));
     const toDelta = (value) => value * scale.sd + scale.mean;
     // 取后验均值最高的已评估配置，而不是样本均值最高者：减轻从大量带噪候选中择优的高估。
     const best = ranking[0].entry;
@@ -625,11 +691,17 @@ export async function optimizeThresholds({ teamState, variables, evaluateBatch, 
             posteriorMean: toDelta(item.mean), posteriorSd: item.sd * scale.sd,
         });
     }
+    const inverseSquares = params.lengthscales.map((value) => 1 / (value * value));
+    const maxRelevance = Math.max(...inverseSquares);
     return {
         method: "bayes",
         bestTeamState: withValues(original, variables, bestValues),
         bestValues, history, curve: [], contexts: [], modelSlices, alternatives,
-        evaluations: history.length, truncated: false, stopReason,
+        evaluations: spentRounded(), configurations: history.length, seedCount: seeds.length,
+        racing: racing ? { stageSeeds: stageSeeds.length, promoted: history.filter((entry) => entry.phase === "promotion").length } : null,
+        truncated: false, stopReason,
+        // 长度尺度越短，阈值对 DPS 越敏感；归一化到最敏感者为 1，只是模型估计。
+        sensitivity: variables.map((_, variableIndex) => ({ variableIndex, relevance: inverseSquares[variableIndex] / maxRelevance })),
         model: {
             lengthscales: params.lengthscales, signal: params.signal * scale.sd * scale.sd,
             noise: params.noise * scale.sd * scale.sd, fittedPoints: fittedAt,

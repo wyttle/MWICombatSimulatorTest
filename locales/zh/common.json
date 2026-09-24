@@ -46,6 +46,11 @@
             "coordinate": "坐标搜索（逐个）"
         },
         "searchMethodHint": "贝叶斯优化把勾选的阈值放在一起建模，可同时改动多个阈值，能找到「一起改才有收益」的组合；坐标搜索每次只动一个阈值。",
+        "reuseSamples": "复用已有评估",
+        "reuseSamplesHint": "探索阶段使用固定的一组 seed，同一队伍、地下城和设置下已模拟过的配置直接从浏览器存储读取，不再重算；最终验证始终使用新的 seed。",
+        "scanConfigurations": "测过 {{count}} 个配置",
+        "scanRacing": "分级评估：先跑 {{stage}}/{{total}} 个 seed，{{promoted}} 个候选补跑完整",
+        "scanReused": "复用了之前 {{count}} 次评估的样本",
         "scanEstimate": "已勾选 {{thresholds}} 个条件：探索预算上界约 {{evaluations}} 次评估、{{runs}} 场地下城；最终独立验证另计。",
         "scanEstimateBayes": "已勾选 {{thresholds}} 个条件：建议探索预算约 {{evaluations}} 次评估、{{runs}} 场地下城；预算越多越有机会找到联动组合；最终独立验证另计。",
         "memoryEstimate": "并行占用约 {{memory}}：每个线程峰值约 {{perWorker}}，开太多会让页面耗尽内存崩溃。",
@@ -87,6 +92,17 @@
             "noModelSlice": "此变量尚无有效模型切片。",
             "posteriorEstimate": "模型估计 ΔDPS：{{mean}}；模型标准差：{{sd}}",
             "bestValue": "所选最佳阈值：{{value}}",
+            "sensitivity": "阈值敏感度",
+            "sensitivityHelp": "根据高斯过程长度尺度估计的相对影响，并非实测结果。只有在评估次数足够后才有参考意义。",
+            "sensitivityLow": "模型认为此阈值几乎没有影响；下次运行可考虑取消勾选，将预算用于其他阈值。",
+            "partialSamples": "部分样本：{{samples}}/{{total}}",
+            "partialHelp": "较小的空心点仅使用了部分配对种子样本；其区间基于较少样本，可能更宽。",
+            "samplesTotal": "配对样本数 / 总种子数",
+            "phase": "搜索阶段",
+            "phaseBaseline": "基线",
+            "phaseInitial": "初始探索",
+            "phaseAcquisition": "采集",
+            "phasePromotion": "补全评估",
             "axisScale": "阈值坐标轴尺度",
             "linearScale": "线性",
             "logScale": "类对数（带符号 log1p）",
@@ -155,7 +171,7 @@
             "stopped": "模拟已中止",
             "error": "模拟失败",
             "pricing": "正在获取价格",
-            "resumed": "已恢复上次未结束的模拟，沿用 {{done}} 个已完成的 seed 结果继续运行"
+            "resumed": "已恢复上次未结束的模拟，已完成的 seed 结果从存储读取，继续运行"
         },
         "result": {
             "baseline": "原始方案",

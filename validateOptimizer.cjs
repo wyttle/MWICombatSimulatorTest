@@ -121,12 +121,14 @@ async function main() {
         })),
     });
     // 把单配置评估函数包装成批量接口；reverse 时倒序完成，模拟并行线程乱序返回。
-    const batchOf = (evaluateOne, { reverse = false } = {}) => async (states, onResult) => {
+    // subset 给定时只返回这些 seed 的样本（分级评估的第一阶段或补跑）。
+    const batchOf = (evaluateOne, { reverse = false } = {}) => async (states, onResult, subset = null) => {
         const results = new Array(states.length);
         const order = states.map((_, index) => index);
         if (reverse) order.reverse();
         for (const index of order) {
-            results[index] = await evaluateOne(states[index]);
+            const samples = await evaluateOne(states[index], subset);
+            results[index] = subset ? samples.filter((sample) => subset.includes(sample.seed)) : samples;
             onResult?.(index, results[index]);
         }
         return results;
@@ -226,7 +228,7 @@ async function main() {
 
     // 6c. 贝叶斯优化：单独改任一阈值都变差、一起改才变好时，必须找到联动组合；坐标搜索在此必然失败。
     const { optimizeThresholds, batchSizeFor } = await import("./src/optimizer/bayes.js");
-    const jointSeeds = [5, 6, 7, 8];
+    const jointSeeds = [5, 6, 7, 8, 9, 10, 11, 12];
     const jointVariables = [0, 1, 2].map((index) => ({ playerId: String(index + 1), abilityHrid: "/abilities/test", triggerIndex: 0, min: 0, max: 10000, step: 100 }));
     const jointDps = ([a, b, c]) => {
         const inA = a >= 3000 && a <= 6000;
@@ -236,31 +238,45 @@ async function main() {
     const jointRun = async ({ reverse = false, batchSize = 4 } = {}) => {
         const seen = new Set();
         const batches = [];
-        const evaluate = batchOf(async (state) => {
+        const evaluate = batchOf(async (state, subset) => {
             const values = state.players.map((player) => player.state.triggerMap["/abilities/test"][0].value);
             const key = JSON.stringify(values);
-            assert.ok(!seen.has(key), "同一完整配置不得重复模拟");
-            seen.add(key);
+            for (const seed of subset ?? jointSeeds) {
+                assert.ok(!seen.has(`${key}|${seed}`), "同一配置的同一 seed 不得重复模拟");
+                seen.add(`${key}|${seed}`);
+            }
             assert.ok(values.every((value) => value % 100 === 0 && value >= 0 && value <= 10000), `候选必须落在用户网格上：${key}`);
             // seed 间有共同噪声，配对差值里被抵消，模拟真实数据的结构。
             return jointSeeds.map((seed) => ({ seed, dps: jointDps(values) + (seed % 3) * 2, completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12 }));
         }, { reverse });
         const result = await optimizeThresholds({
             teamState: syntheticTeam([0, 0, 0]), variables: jointVariables, seeds: jointSeeds, maxEvaluations: 60, batchSize,
-            evaluateBatch: (states, onResult) => {
+            evaluateBatch: (states, onResult, subset) => {
                 batches.push(states.length);
-                return evaluate(states, onResult);
+                return evaluate(states, onResult, subset);
             },
         });
-        return { result, batches, simulated: seen.size };
+        return { result, batches, seedRuns: seen.size };
     };
     const joint = await jointRun();
     assert.ok(jointDps(joint.result.bestValues) - jointDps([0, 0, 0]) > 5, `必须找到联动区，实际 ${joint.result.bestValues}`);
     assert.deepEqual(joint.result.history[0].values, [0, 0, 0], "第一条记录必须是原始配置");
-    assert.ok(joint.result.evaluations <= 60 && joint.simulated === joint.result.evaluations, "不得超出预算，每次评估都要可追溯");
+    // 预算按 seed 场次折算：模拟的 seed 场次除以 seed 数等于报告的评估次数，且不超预算。
+    assert.ok(joint.result.evaluations <= 60, `不得超出预算：${joint.result.evaluations}`);
+    assert.equal(joint.result.evaluations, Math.round(joint.seedRuns / jointSeeds.length * 100) / 100, "报告的评估次数必须与实际模拟量一致");
+    // 分级评估：先跑一半（4/8）的 seed，被淘汰的候选只有部分样本；最优方案必须是完整评估过的。
+    const partial = joint.result.history.filter((entry) => entry.samples.length < jointSeeds.length);
+    assert.ok(partial.length > 0 && joint.result.history.some((entry) => entry.phase === "promotion"), "必须出现淘汰与补跑");
+    assert.ok(partial.every((entry) => entry.comparison.n === entry.samples.length), "部分评估的配对统计必须只用已有 seed");
+    assert.ok(joint.result.history.length > joint.result.evaluations, "淘汰应让测过的配置数多于折算评估次数");
+    const bestEntry = joint.result.history.find((entry) => JSON.stringify(entry.values) === JSON.stringify(joint.result.bestValues));
+    assert.equal(bestEntry.samples.length, jointSeeds.length, "最优方案必须有完整 seed 样本");
+    assert.ok(joint.result.alternatives.every((entry) => entry.comparison.n === jointSeeds.length), "备选方案必须都是完整评估");
     // 基线和初始设计不依赖模型，整批提交；之后按模型选点，每批不得超过 batchSize。
     assert.ok(joint.batches.length > 3 && joint.batches.slice(2).every((size) => size <= 4), `每批配置数不得超过 batchSize：${joint.batches}`);
     assert.ok(joint.result.modelSlices.every((slice) => slice.points.every((point) => Number.isFinite(point.mean) && point.sd >= 0)), "模型切片必须是有限值");
+    assert.ok(joint.result.sensitivity.length === 3 && Math.max(...joint.result.sensitivity.map((entry) => entry.relevance)) === 1, "敏感度必须归一化到最大为 1");
+    assert.ok(joint.result.sensitivity[2].relevance < Math.max(joint.result.sensitivity[0].relevance, joint.result.sensitivity[1].relevance), "作用最弱的第三个阈值敏感度必须低于联动的两个");
     const jointCoordinate = await scanThresholds({
         teamState: syntheticTeam([0, 0, 0]), variables: jointVariables, seeds: jointSeeds, maxEvaluations: 60,
         evaluateBatch: batchOf(async (state) => {

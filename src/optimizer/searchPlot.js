@@ -21,6 +21,17 @@ const SEARCH_ANALYSIS_TEXT = {
     noModelSlice: "No finite model slice is available for this variable.",
     posteriorEstimate: "Model estimate ΔDPS: {{mean}}; model standard deviation: {{sd}}",
     bestValue: "Selected best threshold: {{value}}",
+    sensitivity: "Threshold sensitivity",
+    sensitivityHelp: "Relative influence estimated from the Gaussian-process length scales, not a measurement. Only meaningful after enough evaluations.",
+    sensitivityLow: "The model rates this threshold as barely influential; consider unticking it next run to spend the budget on the others.",
+    partialSamples: "partial: {{samples}}/{{total}}",
+    partialHelp: "Hollow, smaller points have only some paired seed samples; their intervals are based on fewer samples and may be wider.",
+    samplesTotal: "Paired samples / total seeds",
+    phase: "Search phase",
+    phaseBaseline: "Baseline",
+    phaseInitial: "Initial",
+    phaseAcquisition: "Acquisition",
+    phasePromotion: "Promotion",
     axisScale: "Threshold axis scale",
     linearScale: "Linear",
     logScale: "Log-like (signed log1p)",
@@ -143,11 +154,40 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
         ? `[${exact(comparison.ciLow)}, ${exact(comparison.ciHigh)}]` : text("unavailable");
     const history = scan.history ?? [];
     const isBayes = scan.method === "bayes";
+    const sampleCount = (entry) => entry.comparison?.n ?? entry.samples?.length;
+    const isPartial = (entry) => isBayes && Number.isFinite(scan.seedCount) && sampleCount(entry) < scan.seedCount;
+    const sampleText = (entry) => {
+        if (!isBayes) return exact(entry.comparison?.n);
+        const samples = exact(sampleCount(entry));
+        if (!Number.isFinite(scan.seedCount)) return samples;
+        const total = exact(scan.seedCount);
+        return isPartial(entry) ? text("partialSamples", { samples, total }) : `${samples}/${total}`;
+    };
     const contexts = scan.contexts ?? [];
     const points = scan.curve?.length ? scan.curve : history;
     const evaluations = new Map(history.map((entry) => [configurationId(entry), entry.id]));
     const root = element("section", "border rounded p-3 mt-3");
     root.append(label("h5", "mb-2", "title"), label("p", "small text-muted", isBayes ? "modelCaveat" : "caveat"));
+    if (isBayes && scan.sensitivity) {
+        const sensitivity = element("section", "optimizer-sensitivity mb-3");
+        sensitivity.append(label("h6", "mb-1", "sensitivity"), label("p", "small text-muted mb-2", "sensitivityHelp"));
+        for (const { variableIndex, relevance } of [...scan.sensitivity].sort((a, b) => b.relevance - a.relevance)) {
+            const row = element("div", "optimizer-sensitivity-row small mb-2");
+            const heading = element("div", "d-flex justify-content-between gap-2");
+            const percentage = `${format(relevance * 100, 1)}%`;
+            heading.append(element("span", "text-break", variableLabel(variableIndex)), element("span", "text-nowrap", percentage));
+            const track = element("div", "bg-secondary bg-opacity-25 rounded overflow-hidden");
+            track.style.height = "0.4rem";
+            track.setAttribute("aria-hidden", "true");
+            const bar = element("div", "optimizer-sensitivity-bar bg-primary h-100");
+            bar.style.width = `${relevance * 100}%`;
+            track.append(bar);
+            row.append(heading, track);
+            if (relevance < 0.05) row.append(label("p", "optimizer-sensitivity-hint text-muted mb-0 mt-1", "sensitivityLow"));
+            sensitivity.append(row);
+        }
+        root.append(sensitivity);
+    }
 
     const controls = element("div", "row g-2 mb-2");
     const variableSelect = element("select", "form-select form-select-sm");
@@ -177,6 +217,7 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     const pointDetails = element("p", "small text-break mb-3");
     pointDetails.setAttribute("aria-live", "polite");
     root.append(controls, fixedValues, chartContainer, chartHelp, pointDetails);
+    if (isBayes) root.append(label("p", "small text-muted mb-2", "partialHelp"));
 
     function drawContext() {
         chartContainer.replaceChildren();
@@ -290,14 +331,20 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
             }
             const description = text("point", {
                 value: exact(pointValue(entry)), delta: exact(comparison.deltaDps), interval: interval(comparison),
-                samples: exact(comparison.n), id: entry.id ?? entry.historyId ?? evaluations.get(configurationId(entry)) ?? text("unavailable"),
+                samples: sampleText(entry), id: entry.id ?? entry.historyId ?? evaluations.get(configurationId(entry)) ?? text("unavailable"),
                 config: configurationId(entry),
             });
             const dot = svgElement("circle", {
                 cx, cy: y(comparison.deltaDps), r: 5, fill: "var(--bs-primary, #0d6efd)",
                 stroke: "currentColor", "stroke-width": 0.5, tabindex: 0, role: "img", "aria-label": description,
             });
-            if (isBayes) dot.setAttribute("class", "optimizer-measured-point");
+            if (isBayes) dot.setAttribute("class", `optimizer-measured-point${isPartial(entry) ? " optimizer-partial-point" : ""}`);
+            if (isPartial(entry)) {
+                dot.setAttribute("r", "4");
+                dot.setAttribute("fill", "var(--bs-body-bg, #fff)");
+                dot.setAttribute("stroke", "var(--bs-primary, #0d6efd)");
+                dot.setAttribute("stroke-width", "1.5");
+            }
             dot.append(svgElement("title", {}, description));
             const showDetails = () => { pointDetails.textContent = description; };
             dot.addEventListener("focus", showDetails);
@@ -336,9 +383,10 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     if (!alternatives.length) root.append(label("p", "small text-muted", "noAlternatives"));
     for (const alternative of alternatives) {
         const row = element("div", "border rounded p-2 mb-2 small");
+        if (isPartial(alternative)) row.classList.add("optimizer-partial-configuration");
         const comparison = alternative.comparison ?? {};
         row.append(element("div", "text-break", `${text("configuration")}: ${configurationId(alternative)}`));
-        row.append(element("div", "mb-2", `${text("candidateDps")}: ${exact(comparison.candidateDps)}; ${text("deltaDps")}: ${exact(comparison.deltaDps)}; ${text("ciLow")}: ${exact(comparison.ciLow)}; ${text("ciHigh")}: ${exact(comparison.ciHigh)}; ${text("samples")}: ${exact(comparison.n)}`));
+        row.append(element("div", "mb-2", `${text("candidateDps")}: ${exact(comparison.candidateDps)}; ${text("deltaDps")}: ${exact(comparison.deltaDps)}; ${text("ciLow")}: ${exact(comparison.ciLow)}; ${text("ciHigh")}: ${exact(comparison.ciHigh)}; ${text("samples")}: ${sampleText(alternative)}`));
         if (Number.isFinite(alternative.posteriorMean) && Number.isFinite(alternative.posteriorSd)) {
             row.append(label("div", "optimizer-posterior-estimate mb-2", "posteriorEstimate", { mean: format(alternative.posteriorMean, 2, true), sd: format(alternative.posteriorSd) }));
         }
@@ -374,8 +422,10 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
             ["deltaPercent", "deltaPercent"], ["ciLow", "ciLow"], ["ciHigh", "ciHigh"], ["samples", "n"],
             ["deaths", "deathsPerHourDelta"], ["wipes", "wipeRateDelta"], ["clears", "clearsPerHourDelta"],
         ];
-        for (const key of ["evaluation", "configuration", "contextId", "variable", "value", "step", ...metrics.map(([key]) => key), "rawSamples"]) {
-            const heading = label("th", "text-nowrap", key);
+        const columnKeys = ["evaluation", "configuration", "contextId", "variable", "value", "step", ...(isBayes ? ["phase"] : []), ...metrics.map(([key]) => key), "rawSamples"];
+        const columnClass = (key) => isBayes && key === "samples" ? "optimizer-history-samples" : isBayes && key === "phase" ? "optimizer-history-phase" : "";
+        for (const key of columnKeys) {
+            const heading = label("th", `text-nowrap${columnClass(key) ? ` ${columnClass(key)}` : ""}`, isBayes && key === "samples" ? "samplesTotal" : key);
             heading.scope = "col";
             headings.append(heading);
         }
@@ -383,10 +433,16 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
         const body = element("tbody");
         for (const entry of history) {
             const row = element("tr");
+            if (isPartial(entry)) row.classList.add("optimizer-partial-configuration");
+            const phaseKey = { baseline: "phaseBaseline", initial: "phaseInitial", acquisition: "phaseAcquisition", promotion: "phasePromotion" }[entry.phase];
             const cells = [entry.id ?? text("unavailable"), configurationId(entry), entry.contextId ?? text("baseline"),
                 variableLabel(entry.variableIndex), exact(pointValue(entry)), exact(entry.step),
-                ...metrics.map(([, key]) => exact(entry.comparison?.[key]))];
-            for (const value of cells) row.append(element("td", "text-nowrap", String(value)));
+                ...(isBayes ? [text(phaseKey ?? "unavailable")] : []),
+                ...metrics.map(([, key]) => isBayes && key === "n" ? sampleText(entry) : exact(entry.comparison?.[key]))];
+            for (const [index, value] of cells.entries()) {
+                const className = columnClass(columnKeys[index]);
+                row.append(element("td", `text-nowrap${className ? ` ${className}` : ""}`, String(value)));
+            }
             const samplesCell = element("td");
             const sampleDetails = element("details");
             sampleDetails.append(label("summary", "text-nowrap", "rawSamples"));

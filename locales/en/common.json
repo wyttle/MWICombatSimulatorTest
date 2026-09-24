@@ -46,6 +46,11 @@
             "coordinate": "Coordinate search (one at a time)"
         },
         "searchMethodHint": "Bayesian optimization models all selected thresholds together and can change several at once, so it finds combinations that only help when changed together. Coordinate search moves one threshold at a time.",
+        "reuseSamples": "Reuse earlier evaluations",
+        "reuseSamplesHint": "Exploration uses a fixed seed set, so configurations already simulated for this team, dungeon and settings are read from browser storage instead of being simulated again. Final validation always uses fresh seeds.",
+        "scanConfigurations": "{{count}} configurations measured",
+        "scanRacing": "Racing: {{stage}}/{{total}} seeds first, {{promoted}} candidates completed",
+        "scanReused": "Reused samples from {{count}} earlier evaluations",
         "scanEstimate": "{{thresholds}} condition(s): exploration upper budget about {{evaluations}} evaluations / {{runs}} dungeon attempts; final holdout validation is additional.",
         "scanEstimateBayes": "{{thresholds}} condition(s): suggested exploration budget about {{evaluations}} evaluations / {{runs}} dungeon attempts; more budget improves the chance of finding joint combinations; final holdout validation is additional.",
         "memoryEstimate": "Roughly {{memory}} in parallel: each worker peaks near {{perWorker}}, and too many will crash the page out of memory.",
@@ -87,6 +92,17 @@
             "noModelSlice": "No finite model slice is available for this variable.",
             "posteriorEstimate": "Model estimate ΔDPS: {{mean}}; model standard deviation: {{sd}}",
             "bestValue": "Selected best threshold: {{value}}",
+            "sensitivity": "Threshold sensitivity",
+            "sensitivityHelp": "Relative influence estimated from the Gaussian-process length scales, not a measurement. Only meaningful after enough evaluations.",
+            "sensitivityLow": "The model rates this threshold as barely influential; consider unticking it next run to spend the budget on the others.",
+            "partialSamples": "partial: {{samples}}/{{total}}",
+            "partialHelp": "Hollow, smaller points have only some paired seed samples; their intervals are based on fewer samples and may be wider.",
+            "samplesTotal": "Paired samples / total seeds",
+            "phase": "Search phase",
+            "phaseBaseline": "Baseline",
+            "phaseInitial": "Initial",
+            "phaseAcquisition": "Acquisition",
+            "phasePromotion": "Promotion",
             "axisScale": "Threshold axis scale",
             "linearScale": "Linear",
             "logScale": "Log-like (signed log1p)",
@@ -155,7 +171,7 @@
             "stopped": "Simulation stopped",
             "error": "Simulation failed",
             "pricing": "Loading prices",
-            "resumed": "Resumed the unfinished run; reusing {{done}} completed seed results"
+            "resumed": "Resumed the unfinished run; completed seed results are read from storage"
         },
         "result": {
             "baseline": "Baseline",

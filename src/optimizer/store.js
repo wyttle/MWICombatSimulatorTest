@@ -1,8 +1,10 @@
 // 队伍优化器的浏览器持久化：历史报告、未完成运行的检查点、逐 seed 样本缓存。
 // 全部放 IndexedDB：扫描报告含逐 seed 样本和多套完整队伍，localStorage 的 5 MB 上限不够。
 const DB_NAME = "mwi-optimizer";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const HISTORY_LIMIT = 20;
+// 样本按「配置 × seed」跨运行缓存：同一队伍再跑一轮时已测过的配置直接复用。每条约几百字节。
+const SAMPLE_LIMIT = 60000;
 
 let databasePromise = null;
 
@@ -17,12 +19,16 @@ function database() {
     if (!globalThis.indexedDB) return Promise.reject(new Error("IndexedDB 不可用"));
     databasePromise ??= new Promise((resolve, reject) => {
         const open = indexedDB.open(DB_NAME, DB_VERSION);
-        open.onupgradeneeded = () => {
+        open.onupgradeneeded = (event) => {
             const db = open.result;
-            // reports: 完成、中止或失败的报告；runs: 仍需续跑的检查点；samples: 检查点对应的已完成 seed。
-            db.createObjectStore("reports", { keyPath: "id" }).createIndex("finishedAt", "finishedAt");
-            db.createObjectStore("runs", { keyPath: "id" });
-            db.createObjectStore("samples");
+            // reports: 完成、中止或失败的报告；runs: 仍需续跑的检查点；samples: 跨运行的逐 seed 样本缓存。
+            if (event.oldVersion < 1) {
+                db.createObjectStore("reports", { keyPath: "id" }).createIndex("finishedAt", "finishedAt");
+                db.createObjectStore("runs", { keyPath: "id" });
+            }
+            // v1 的样本按运行 id 隔离，无法跨运行复用；直接换成按配置键缓存，旧的未完成运行会重新模拟。
+            if (event.oldVersion >= 1 && event.oldVersion < 2) db.deleteObjectStore("samples");
+            db.createObjectStore("samples").createIndex("at", "at");
         };
         open.onsuccess = () => {
             const db = open.result;
@@ -73,8 +79,8 @@ export function jobKey(value) {
     return `${cyrb53(text, 1)}${cyrb53(text, 2)}`;
 }
 
-function sampleRange(runId) {
-    return IDBKeyRange.bound(`${runId}|`, `${runId}|\uffff`);
+function sampleRange(key) {
+    return IDBKeyRange.bound(`${key}|`, `${key}|\uffff`);
 }
 
 export function saveRun(run) {
@@ -85,25 +91,39 @@ export function listRuns() {
     return transaction(["runs"], "readonly", (tx) => request(tx.objectStore("runs").getAll()));
 }
 
-// 运行结束（完成、中止或失败）时一起删除检查点和样本缓存，之后不会再被续跑。
+// 运行结束（完成、中止或失败）时删除检查点，之后不会再被续跑；样本缓存保留给后续运行复用。
 export function deleteRun(runId) {
-    return transaction(["runs", "samples"], "readwrite", async (tx) => {
-        await request(tx.objectStore("runs").delete(runId));
-        await request(tx.objectStore("samples").delete(sampleRange(runId)));
-    });
+    return transaction(["runs"], "readwrite", (tx) => request(tx.objectStore("runs").delete(runId)));
 }
 
-export function saveSample(runId, key, seed, sample) {
-    return transaction(["samples"], "readwrite", (tx) => request(tx.objectStore("samples").put(sample, `${runId}|${key}|${seed}`)));
+export function saveSample(key, seed, sample) {
+    return transaction(["samples"], "readwrite", (tx) => request(tx.objectStore("samples").put({ sample, at: Date.now() }, `${key}|${seed}`)));
 }
 
-export async function loadSamples(runId) {
+// 取某个配置键已缓存的全部 seed 样本。
+export async function loadSamples(key) {
     return transaction(["samples"], "readonly", async (tx) => {
         const store = tx.objectStore("samples");
-        const range = sampleRange(runId);
+        const range = sampleRange(key);
         const [keys, values] = await Promise.all([request(store.getAllKeys(range)), request(store.getAll(range))]);
-        return new Map(keys.map((key, index) => [key.slice(runId.length + 1), values[index]]));
+        return new Map(keys.map((storedKey, index) => [Number(storedKey.slice(key.length + 1)), values[index].sample]));
     });
+}
+
+// 超出上限时按写入时间淘汰最旧的样本。
+export async function pruneSamples() {
+    return transaction(["samples"], "readwrite", async (tx) => {
+        const store = tx.objectStore("samples");
+        const excess = (await request(store.count())) - SAMPLE_LIMIT;
+        if (excess <= 0) return 0;
+        const keys = await request(store.index("at").getAllKeys(null, excess));
+        await Promise.all(keys.map((key) => request(store.delete(key))));
+        return keys.length;
+    });
+}
+
+export function clearSamples() {
+    return transaction(["samples"], "readwrite", (tx) => request(tx.objectStore("samples").clear()));
 }
 
 // 只保留最近 HISTORY_LIMIT 份报告，旧的按完成时间淘汰。

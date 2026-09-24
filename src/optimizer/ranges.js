@@ -369,6 +369,8 @@ export function resolveScanVariables({ teamState, variables, zone, extra = {}, g
         return {
             ...variable, min, max, step,
             suggestedPoints: strategicPoints({ min, max, step, current, support, guidance, condition, dependency }),
+            // 贝叶斯优化的输入扭曲节点不含当前阈值：否则「应用」后再跑一轮时整套初始设计会平移，跨轮缓存全部失效。
+            warpPoints: strategicPoints({ min, max, step, current: NaN, support, guidance, condition, dependency }),
             rangeInfo: {
                 automaticMin, automaticMax, supportMin: support.min, supportMax: support.max,
                 gridOrigin: min, currentThreshold: current,
