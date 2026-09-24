@@ -7,12 +7,15 @@ import { priceChanges, priceConsumableDelta } from "./cost.js";
 import { listEquipmentCandidates, buildChange, applyChanges, validateChanges, generateUpgradeCandidates } from "./candidates.js";
 import { scanThresholds, estimateScanBudget } from "./search.js";
 import { WORKER_PEAK_MB } from "../workerBudget.js";
+import { resolveScanVariables } from "./ranges.js";
+import { renderSearchAnalysis } from "./searchPlot.js";
 
 const EQUIPMENT_SLOTS = ["head", "body", "legs", "feet", "hands", "main_hand", "two_hand", "off_hand", "pouch", "neck", "earrings", "ring", "back", "charm"].map((slot) => `/equipment_types/${slot}`);
 
 export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices }) {
     const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optMemoryEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
+    ui.optInputSearchCount = document.getElementById("optInputSearchCount");
     const modal = ui.optimizerModal;
     let snapshot = null;
     let originalTeamState = null;
@@ -150,7 +153,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         ui.optButtonRun.disabled = running || !draftTeamState?.players.length;
         ui.optButtonScan.disabled = running || !draftTeamState?.players.length;
         ui.optButtonApply.disabled = running || !draftTeamState?.players.length;
-        ui.optButtonExport.disabled = running || !report;
+        ui.optButtonExport.disabled = !report;
     }
 
     function setRunning(value) {
@@ -208,8 +211,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         setTriggers(state, abilityHrid, next);
     }
 
-    // 扫描范围的默认值：步长恒为 1 的话，HP 这类千量级阈值会展开出上千个网格点，
-    // 预算瞬间耗尽且只探索到区间最左端。按条件类型给出可直接开跑的范围。
+    // 上下界留空时按战斗模型推导；步长仍由用户控制最终精度。
     const COUNT_CONDITIONS = ["/combat_trigger_conditions/number_of_active_units", "/combat_trigger_conditions/number_of_dead_units"];
 
     function niceStep(span) {
@@ -226,15 +228,13 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         const value = Number(trigger.value);
         const current = Number.isFinite(value) ? value : 0;
         if (COUNT_CONDITIONS.includes(trigger.conditionHrid)) {
-            return { min: 0, max: Math.max(5, Math.ceil(current)), step: 1 };
+            return { min: "", max: "", step: 1 };
         }
         if (trigger.conditionHrid === "/combat_trigger_conditions/lowest_hp_percentage") {
-            return { min: 0, max: 100, step: 10 };
+            return { min: "", max: "", step: 10 };
         }
-        // HP/MP 这类绝对值：以当前阈值为中心向两侧各展开一倍。
-        // 下限 1000 是必要的：原阈值为 1 时展开成 0~2 既没有意义，还会扫出小数 HP。
         const max = Math.max(1000, Math.ceil(current * 2));
-        return { min: 0, max, step: Math.max(1, niceStep(max)) };
+        return { min: "", max: "", step: Math.max(1, niceStep(max)) };
     }
 
     function renderVariables(container, playerId, state, abilityHrid, synchronize) {
@@ -265,6 +265,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             }
             checkColumn.append(terms);
             row.append(checkColumn);
+            checkColumn.append(label("autoRangeHint", "small text-muted d-block"));
             for (const [field, keyName] of [["min", "minimum"], ["max", "maximum"], ["step", "step"]]) {
                 const column = element("div", "col-md-2");
                 const inputLabel = element("label", "d-block");
@@ -274,7 +275,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 input.value = record[field];
                 if (field === "step") input.min = "0";
                 input.addEventListener("change", () => {
-                    record[field] = input.value === "" ? NaN : Number(input.value);
+                    record[field] = input.value === "" ? "" : Number(input.value);
                     synchronize();
                 });
                 inputLabel.append(label(keyName), input);
@@ -482,6 +483,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             zone: { zoneHrid: ui.optSelectDungeon.value, difficultyTier },
             dungeonCount: integer(ui.optInputDungeonCount),
             concurrency: integer(ui.optInputParallelCount),
+            searchDungeonCount: Math.min(integer(ui.optInputSearchCount), integer(ui.optInputDungeonCount)),
             seedCount: integer(ui.optInputSeedCount),
             maxEvaluations: integer(ui.optInputMaxEvaluations),
             extra: structuredClone(snapshot.extra),
@@ -496,12 +498,16 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 getTriggers(state, abilityHrid).forEach((trigger, triggerIndex) => {
                     const record = variables.get(variableKey(id, abilityHrid, triggerIndex));
                     if (!record?.checked || !combatTriggerComparatorDetailMap[trigger.comparatorHrid]?.allowValue) return;
-                    if (![record.min, record.max, record.step].every(Number.isFinite) || record.min > record.max || record.step <= 0) throw new Error(t("errors.invalidSettings"));
-                    active.push({ playerId: id, abilityHrid, triggerIndex, min: record.min, max: record.max, step: record.step });
+                    if (!Number.isFinite(record.step) || record.step <= 0) throw new Error(t("errors.invalidSettings"));
+                    active.push({ playerId: id, abilityHrid, triggerIndex, min: record.min === "" ? null : record.min, max: record.max === "" ? null : record.max, step: record.step });
                 });
             }
         }
-        return active;
+        return resolveScanVariables({
+            teamState: draftTeamState, variables: active,
+            zone: { zoneHrid: ui.optSelectDungeon.value, difficultyTier: Number(ui.optSelectDifficulty.value) },
+            extra: snapshot.extra, guildShrineLevels: snapshot.guildShrineLevels,
+        });
     }
 
     // 「最大评估次数」是机时闸门，但没人算得出跑完全部分辨率要多少次。
@@ -516,16 +522,22 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         }
         const budget = estimateScanBudget(active);
         if (!budget) return ui.optScanEstimate.replaceChildren();
-
+        const runs = budget * Number(ui.optInputSeedCount.value) * Math.min(Number(ui.optInputSearchCount.value), Number(ui.optInputDungeonCount.value));
         // 估算值可能超过输入框允许的上限；此时填满上限，提示里仍给出真实需求，让截断可预期。
         const cap = Number(ui.optInputMaxEvaluations.max) || budget;
         if (!budgetTouched) ui.optInputMaxEvaluations.value = String(Math.min(budget, cap));
-        const runs = budget * Number(ui.optInputSeedCount.value) * Number(ui.optInputDungeonCount.value);
         ui.optScanEstimate.replaceChildren(label("scanEstimate", "", {
             thresholds: format(active.length, 0),
             evaluations: format(budget, 0),
             runs: Number.isFinite(runs) ? format(runs, 0) : t("result.unavailable"),
         }));
+        for (const variable of active) {
+            const row = element("div", "small");
+            row.append(playerLabel(variable.playerId), document.createTextNode(" · "),
+                element("span", "me-1", `abilityNames.${variable.abilityHrid}`),
+                label("resolvedRange", "", { min: format(variable.min), max: format(variable.max), step: format(variable.step) }));
+            ui.optScanEstimate.append(row);
+        }
         translate();
     }
 
@@ -614,6 +626,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
 
     function renderResults() {
         ui.optResults.replaceChildren();
+        if (report?.scan && results.length) ui.optResults.append(label("holdoutNote", "d-block alert alert-info"));
         for (const [index, result] of results.entries()) {
             const card = element("section", "border rounded p-3 mb-3");
             const heading = element("h5");
@@ -676,19 +689,29 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             ui.optResults.append(card);
         }
         if (report?.scan) {
-            const details = element("details", "mb-2");
-            const summary = element("summary", "", "common:optimizer.result.scanCurve");
-            const count = element("p", "", "common:optimizer.scanEvaluations", { count: report.scan.evaluations });
-            details.append(summary, count);
-            if (report.scan.truncated) details.append(label("scanTruncated", "d-block text-warning"));
-            // 原始曲线随报告导出；界面只展示统计量，不把内部字段名当作可见文案。
-            for (const [index, entry] of report.scan.curve.entries()) {
-                const row = element("div", "small");
-                row.append(label("result.candidate"), document.createTextNode(` ${index + 1}`));
-                row.append(document.createTextNode(" · "), playerLabel(entry.playerId), document.createTextNode(" · "), element("span", "me-2", `abilityNames.${entry.abilityHrid}`), label("condition"), document.createTextNode(` ${entry.triggerIndex + 1}: ${format(entry.value)} · `), label("step"), document.createTextNode(` ${format(entry.step)} · `), label("result.deltaDps"), document.createTextNode(` ${format(entry.comparison.deltaDps)} · `), label("result.interval"), document.createTextNode(` [${format(entry.comparison.ciLow)}, ${format(entry.comparison.ciHigh)}]`));
-                details.append(row);
+            ui.optResults.append(label("scanEvaluations", "d-block", { count: report.scan.evaluations }));
+            ui.optResults.append(label(`searchStop.${report.scan.stopReason ?? "running"}`, "d-block text-muted mb-2"));
+            for (const [index, variable] of report.scan.variables.entries()) {
+                const value = report.scan.bestValues?.[index];
+                if (value !== variable.min && value !== variable.max) continue;
+                const row = element("div", "small text-warning");
+                row.append(playerLabel(variable.playerId), document.createTextNode(" · "),
+                    element("span", "me-1", `abilityNames.${variable.abilityHrid}`), label("boundaryHit", "", { value: format(value) }));
+                ui.optResults.append(row);
             }
-            ui.optResults.append(details);
+            ui.optResults.append(renderSearchAnalysis({
+                scan: report.scan, variables: report.scan.variables, t,
+                abilityName: (hrid) => window.i18next.t(`abilityNames.${hrid}`),
+                playerName: (id) => t("player", { id }),
+                onSelect: (alternative) => {
+                    if (running) return status("errors.running");
+                    draftTeamState = cloneTeamState(alternative.teamState);
+                    selectedTeamState = null;
+                    renderTriggers();
+                    window.bootstrap.Tab.getOrCreateInstance(ui.optTabTriggers).show();
+                    status("alternativeLoaded");
+                },
+            }));
         }
         translate();
     }
@@ -741,6 +764,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         const masterSeed = window.crypto.getRandomValues(new Uint32Array(1))[0];
         const seeds = seedList(masterSeed, settings.seedCount);
         report = { settings, masterSeed, seeds, originalTeamState: cloneTeamState(originalTeamState), draftTeamState: cloneTeamState(draftTeamState), baselineSamples: [], results, scan: null, status: "running" };
+        updateActions();
         try {
             runner = new EvaluationRunner({ concurrency: settings.concurrency });
             status("status.pricing");
@@ -755,9 +779,14 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             }
             signal.throwIfAborted();
             status("status.running", { done: 0, total: seeds.length });
-            const evaluate = (teamState, start, width) => runner.evaluate(teamStateToDTOs(teamState), {
+            const validationSeeds = scan
+                ? seedList(masterSeed, settings.seedCount * 2).slice(settings.seedCount)
+                : seeds;
+            report.validationSeeds = validationSeeds;
+            const evaluate = (teamState, start, width, exploration = false) => runner.evaluate(teamStateToDTOs(teamState), {
                 zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels,
-                dungeonCount: settings.dungeonCount, seeds, signal,
+                dungeonCount: exploration ? settings.searchDungeonCount : settings.dungeonCount,
+                seeds: exploration ? seeds : validationSeeds, signal,
                 onProgress: ({ finished, total, progress }) => {
                     status("status.running", { done: finished, total });
                     setProgress(start + width * (Number.isFinite(progress) ? progress : finished / total));
@@ -766,22 +795,29 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             let pairedStart = 0;
             if (scan) {
                 let evaluations = 0;
+                report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, stopReason: "running" };
+                updateActions();
                 const search = await scanThresholds({
                     teamState: cloneTeamState(draftTeamState), variables: scanVariables,
-                    evaluate: (teamState) => evaluate(teamState, 80 * evaluations / settings.maxEvaluations, 80 / settings.maxEvaluations),
+                    evaluate: (teamState) => evaluate(teamState, 80 * evaluations / settings.maxEvaluations, 80 / settings.maxEvaluations, true),
                     seeds, maxEvaluations: settings.maxEvaluations, signal,
                     onProgress: (progress) => {
                         evaluations = progress.evaluations;
+                        report.scan.evaluations = evaluations;
+                        report.scan.bestValues = progress.bestValues;
+                        if (progress.context && !report.scan.contexts.some((context) => context.id === progress.context.id)) report.scan.contexts.push(progress.context);
+                        if (progress.historyEntry) report.scan.history.push(progress.historyEntry);
+                        if (progress.entry) report.scan.curve.push(progress.entry);
                         setProgress(80 * evaluations / settings.maxEvaluations);
                     },
                 });
                 signal.throwIfAborted();
-                report.scan = { variables: scanVariables, bestValues: search.bestValues, curve: search.curve, evaluations: search.evaluations, truncated: Boolean(search.truncated) };
+                report.scan = { ...search, variables: scanVariables };
                 draftTeamState = cloneTeamState(search.bestTeamState);
                 teams = [cloneTeamState(draftTeamState)];
                 pairedStart = 80;
             }
-            // 扫描结束后重新模拟原始和最优配置，禁止把搜索缓存冒充最终配对样本。
+            // 最终验证用未参与搜索的 seed，避免把搜索择优偏差当成可靠收益。
             const width = (100 - pairedStart) / (teams.length + 1);
             const baselineSamples = await evaluate(originalTeamState, pairedStart, width);
             report.baselineSamples = baselineSamples;
@@ -808,6 +844,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             setProgress(100);
         } catch (error) {
             report.status = signal.aborted || error.name === "AbortError" ? "stopped" : "error";
+            if (report.scan) report.scan.stopReason = report.status;
             if (report.status === "error") {
                 report.error = String(error);
                 console.error(error);
@@ -819,7 +856,10 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             controller = null;
             setRunning(false);
             if (scan) renderTriggers();
-            if (results.length) showResults();
+            if (results.length || report.scan) {
+                renderResults();
+                showResults();
+            }
             translate();
         }
     }
@@ -896,10 +936,13 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     ui.optInputMaxEvaluations.addEventListener("input", () => { budgetTouched = true; });
     ui.optInputSeedCount.addEventListener("input", updateScanEstimate);
     ui.optInputDungeonCount.addEventListener("input", updateScanEstimate);
+    ui.optInputSearchCount.addEventListener("input", updateScanEstimate);
+    ui.optSelectDungeon.addEventListener("change", updateScanEstimate);
+    ui.optSelectDifficulty.addEventListener("change", updateScanEstimate);
     // 结果区与候选列表把词条、编号和本地化数字混排在同一行，逐节点替换靠不住，
     // 语言切换后整体重建；选中的候选由 selectedTeamState 保持，不会被重置。
     window.i18next?.on?.("languageChanged", () => {
-        if (results.length) renderResults();
+        if (results.length || report?.scan) renderResults();
         if (draftTeamState) renderCandidates();
         updateScanEstimate();
     });
@@ -929,7 +972,6 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         }
     });
     ui.optButtonExport.addEventListener("click", () => {
-        if (running) return status("errors.running");
         if (!report) return status("noResults");
         const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
         const link = document.createElement("a");

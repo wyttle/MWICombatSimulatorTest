@@ -87,7 +87,15 @@ module.exports = {
             html = html.replace(/src="js\/([^"?]+\.js)"/g, (match, file) => {
               const asset = path.resolve(__dirname, 'js', file);
               if (!fs.existsSync(asset)) return match;
-              const hash = crypto.createHash('sha256').update(fs.readFileSync(asset)).digest('hex').slice(0, 8);
+              const digest = crypto.createHash('sha256').update(fs.readFileSync(asset));
+              // 翻译文件独立变化时也必须更新转发给 locales 的版本串。
+              if (file === 'i18n.js') {
+                for (const language of fs.readdirSync(path.resolve(__dirname, 'locales')).sort()) {
+                  const locale = path.resolve(__dirname, 'locales', language, 'common.json');
+                  if (fs.existsSync(locale)) digest.update(language).update(fs.readFileSync(locale));
+                }
+              }
+              const hash = digest.digest('hex').slice(0, 8);
               return `src="js/${file}?v=${hash}"`;
             });
             // Replace paths in index.html based on PUBLIC_PATH environment variable

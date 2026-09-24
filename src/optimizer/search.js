@@ -27,61 +27,88 @@ function withValues(teamState, variables, values) {
     return result;
 }
 
-// 一级网格里每个阈值最多试这么多个取值。粗级先定方向，细级只在峰值邻域展开，
-// 这样用户填的步长可以当成最终分辨率，而不必自己先手工粗扫一遍。
 const MAX_POINTS_PER_LEVEL = 9;
+const MAX_BASINS = 3;
+const MAX_SWEEPS = 2;
 
-function align(value, origin, step) {
-    // 所有候选值都对齐到「用户步长」的整数倍，细级才落得回原始网格上。
-    return Number((origin + Math.round((value - origin) / step) * step).toPrecision(15));
+function validRange(variable) {
+    return [variable.min, variable.max, variable.step].every(Number.isFinite) &&
+        variable.min <= variable.max && variable.step > 0 &&
+        Number.isSafeInteger(Math.floor((variable.max - variable.min) / variable.step));
 }
 
-// 每级的步长：最粗一级保证整段区间不超过 MAX_POINTS_PER_LEVEL 个点，随后逐级减半到用户步长。
+function gridValue(variable, index, step = variable.step) {
+    return Number((variable.min + index * step).toPrecision(15));
+}
+
+// 粗级覆盖整个定义域；后续步长只按二倍递减，最后一级始终是用户步长。
 function stepLadder(variable) {
-    const span = variable.max - variable.min;
-    const steps = Math.max(1, Math.round(span / variable.step));
-    const ladder = [];
+    const intervals = (variable.max - variable.min) / variable.step;
     let multiplier = 1;
-    while (steps / multiplier > MAX_POINTS_PER_LEVEL - 1) multiplier *= 2;
+    while (intervals / multiplier > MAX_POINTS_PER_LEVEL - 1) multiplier *= 2;
+    const ladder = [];
     while (multiplier >= 1) {
-        ladder.push(Number((variable.step * multiplier).toPrecision(15)));
+        ladder.push(variable.step * multiplier);
         multiplier /= 2;
     }
     return ladder;
 }
 
-// 某一级的候选值：粗级铺满整段区间，细级只覆盖当前最优值 ± 上一级步长。
-function* levelValues(variable, current, step, previousStep) {
-    const lo = previousStep === null ? variable.min : Math.max(variable.min, current - previousStep);
-    const hi = previousStep === null ? variable.max : Math.min(variable.max, current + previousStep);
-    const seen = new Set([current]);
-    yield current;
-    for (let value = align(lo, variable.min, step); value <= hi; value = Number((value + step).toPrecision(15))) {
-        if (value < lo || seen.has(value)) continue;
-        seen.add(value);
-        yield value;
+function coarseValues(variable, step) {
+    const values = new Set([variable.min, variable.max]);
+    const count = Math.floor((variable.max - variable.min) / step);
+    for (let index = 0; index <= count; index++) values.add(gridValue(variable, index, step));
+    for (const value of variable.suggestedPoints ?? []) {
+        if (!Number.isFinite(value) || value < variable.min || value > variable.max) continue;
+        values.add(gridValue(variable, Math.round((value - variable.min) / variable.step)));
     }
-    // 区间端点本身未必落在步长网格上，但它们是有意义的极端取值。
-    for (const edge of [lo, hi]) {
-        if (!seen.has(edge)) {
-            seen.add(edge);
-            yield edge;
-        }
-    }
+    return [...values].filter((value) => value >= variable.min && value <= variable.max).sort((a, b) => a - b);
 }
 
-// 跑完全部级别所需评估次数的上界：最粗级铺满区间，其余各级只覆盖上一级步长的邻域，
-// 最细级多跑一轮。故意取保守值——预算是上限，估低了会让扫描半途截断。
+function refinementValues(variable, centers, step) {
+    const values = new Set();
+    for (const center of centers) {
+        values.add(center);
+        const position = (center - variable.min) / step;
+        // 非网格端点两侧取相邻网格点，不能把端点当成另一个网格原点。
+        const lower = Math.ceil(position) - 1;
+        const upper = Math.floor(position) + 1;
+        values.add(gridValue(variable, lower, step));
+        values.add(gridValue(variable, upper, step));
+    }
+    return [...values].filter((value) => value >= variable.min && value <= variable.max).sort((a, b) => a - b);
+}
+
+// 只在同一组固定坐标里比较局部峰值；保留不同区域，平峰优先分散取点。
+function selectBasins(points, variable, spacing) {
+    const ordered = [...points.values()]
+        .filter((entry) => entry.value >= variable.min && entry.value <= variable.max)
+        .sort((a, b) => a.value - b.value);
+    const peaks = ordered.filter((entry, index) =>
+        (index === 0 || entry.score >= ordered[index - 1].score) &&
+        (index === ordered.length - 1 || entry.score >= ordered[index + 1].score));
+    const selected = [];
+    while (selected.length < MAX_BASINS && peaks.length) {
+        const distance = (entry) => selected.length
+            ? Math.min(...selected.map((value) => Math.abs(entry.value - value)))
+            : 0;
+        peaks.sort((a, b) => b.score - a.score || distance(b) - distance(a) || a.value - b.value);
+        const next = peaks.shift();
+        if (selected.every((value) => Math.abs(next.value - value) >= spacing)) selected.push(next.value);
+    }
+    return selected;
+}
+
+// 单变量的细级中心已缓存，每个区域最多新增两点；多变量上下文变化时最多新增三点。
+// 两轮全域粗扫给前面的坐标一次跟随后面坐标变化的机会，不把无改进误称为全局收敛。
 export function estimateScanBudget(variables) {
-    if (!Array.isArray(variables) || !variables.length) return 0;
+    if (!Array.isArray(variables) || !variables.length || variables.some((variable) => !validRange(variable))) return 0;
+    const sweeps = variables.length === 1 ? 1 : MAX_SWEEPS;
     let total = 1;
     for (const variable of variables) {
-        if (![variable.min, variable.max, variable.step].every(Number.isFinite) ||
-            variable.min > variable.max || variable.step <= 0) return 0;
         const ladder = stepLadder(variable);
-        const coarsePoints = Math.floor((variable.max - variable.min) / ladder[0]) + 1;
-        // 每个细级在邻域里最多新增 4 个点，最细级再多跑一轮。
-        total += coarsePoints + ladder.length * 4;
+        const refinementBound = MAX_BASINS * (variables.length === 1 ? 2 : 3);
+        total += sweeps * (coarseValues(variable, ladder[0]).length + (ladder.length - 1) * refinementBound);
     }
     return total;
 }
@@ -95,11 +122,7 @@ export async function scanThresholds({ teamState, variables, evaluate, seeds, ma
     }
     const targets = new Set();
     const originalValues = variables.map((variable) => {
-        if (![variable.min, variable.max, variable.step].every(Number.isFinite) ||
-            variable.min > variable.max || variable.step <= 0 ||
-            !Number.isSafeInteger(Math.floor((variable.max - variable.min) / variable.step))) {
-            throw new Error("扫描范围或步长无效");
-        }
+        if (!validRange(variable)) throw new Error("扫描范围或步长无效");
         const key = JSON.stringify([String(variable.playerId), variable.abilityHrid, variable.triggerIndex]);
         if (targets.has(key)) throw new Error("同一技能的触发条件变量重复");
         targets.add(key);
@@ -117,85 +140,108 @@ export async function scanThresholds({ teamState, variables, evaluate, seeds, ma
         const samples = await evaluate(state);
         checkAbort(signal);
         if (!Array.isArray(samples) || samples.length !== seeds.length ||
+            new Set(samples.map((sample) => sample.seed)).size !== seeds.length ||
             samples.some((sample) => !expectedSeeds.has(sample.seed))) throw new Error("扫描样本 seed 不匹配");
         return samples;
     };
     const original = cloneTeamState(teamState);
     const baseline = await run(cloneTeamState(original));
     const initialComparison = comparePaired(baseline, baseline);
-    let evaluations = 1;
-    let bestValues = [...originalValues];
-    let bestDps = initialComparison.candidateDps;
-    const cache = new Map([[JSON.stringify(bestValues), initialComparison]]);
-    const curve = [{
-        playerId: variables[0].playerId,
-        abilityHrid: variables[0].abilityHrid,
-        triggerIndex: variables[0].triggerIndex,
-        value: originalValues[0],
-        step: variables[0].step,
-        comparison: initialComparison,
+    const history = [{
+        id: "evaluation-0", values: [...originalValues], samples: baseline, comparison: initialComparison,
+        contextId: null, variableIndex: null, value: null, step: null,
     }];
-    const report = (entry) => onProgress?.({ evaluations, maxEvaluations, entry, bestValues: [...bestValues] });
-    report(null);
-    // 由粗到细：每个阈值先在整段区间上用放大的步长找方向，再逐级减半、
-    // 只在当前最优值的邻域展开，最后一级正好落在用户填的步长上。
-    // 最细一级跑两轮，让先调的阈值有机会跟随后调的阈值修正。
+    const cache = new Map([[JSON.stringify(originalValues), history[0]]]);
+    let best = history[0];
+    const contexts = [];
+    const contextCache = new Map();
+    const curve = [{
+        ...history[0], samples: undefined,
+        variableIndex: 0, playerId: variables[0].playerId,
+        abilityHrid: variables[0].abilityHrid, triggerIndex: variables[0].triggerIndex,
+        value: originalValues[0], step: variables[0].step, accepted: false, baseline: true,
+        historyId: history[0].id,
+    }];
+    const report = (entry, historyEntry, context) => onProgress?.({
+        evaluations: history.length, maxEvaluations, entry, historyEntry, context, bestValues: [...best.values],
+    });
+    report(curve[0], history[0], null);
+    const finish = (stopReason) => ({
+        bestTeamState: withValues(original, variables, best.values),
+        bestValues: [...best.values], curve, history, contexts,
+        evaluations: history.length, truncated: stopReason === "budget", stopReason,
+        // 搜索样本选出的整套方案仅供探索，不是独立验证通过的收益承诺。
+        alternatives: [...history].sort((a, b) => b.comparison.candidateDps - a.comparison.candidateDps)
+            .slice(0, 5).map((entry) => ({
+                id: entry.id, values: [...entry.values],
+                teamState: withValues(original, variables, entry.values), comparison: entry.comparison,
+            })),
+    });
     const ladders = variables.map(stepLadder);
     const levels = Math.max(...ladders.map((ladder) => ladder.length));
-    for (let level = 0; level < levels; level++) {
-        const finest = level === levels - 1;
-        for (let round = 0; round < (finest ? 2 : 1); round++) {
+    const sweeps = variables.length === 1 ? 1 : MAX_SWEEPS;
+    for (let sweep = 0; sweep < sweeps; sweep++) {
+        const basins = variables.map(() => []);
+        // 先让所有坐标完成粗级，再细化，避免前几个坐标提前吃光共享预算。
+        for (let level = 0; level < levels; level++) {
             for (let index = 0; index < variables.length; index++) {
-                const variable = variables[index];
+                checkAbort(signal);
                 const ladder = ladders[index];
-                // 阶梯短的阈值直接停在自己的最细步长上，不跟着更长的阶梯重复扫。
-                const offset = levels - ladder.length;
-                if (level < offset) continue;
-                const rung = level - offset;
-                const step = ladder[rung];
-                const previousStep = rung === 0 && round === 0 ? null : ladder[Math.max(0, rung - 1)];
-                const fixedValues = [...bestValues];
-                for (const value of levelValues(variable, fixedValues[index], step, previousStep)) {
+                if (level >= ladder.length) continue;
+                const variable = variables[index];
+                const step = ladder[level];
+                const fixedValues = [...best.values];
+                const contextKey = JSON.stringify([index, fixedValues.map((value, other) => other === index ? null : value)]);
+                let context = contextCache.get(contextKey);
+                if (!context) {
+                    context = { id: `context-${contexts.length}`, values: fixedValues, variableIndex: index, step };
+                    contextCache.set(contextKey, context);
+                    contexts.push(context);
+                } else {
+                    context.step = Math.min(context.step, step);
+                }
+                const candidates = level === 0
+                    ? coarseValues(variable, step)
+                    : refinementValues(variable, basins[index], step);
+                const points = new Map();
+                // 原始阈值即使不在指定网格上也保留为对照，不生成越界的新阈值。
+                for (const value of new Set([fixedValues[index], ...candidates])) {
                     checkAbort(signal);
                     const values = [...fixedValues];
                     values[index] = value;
                     const key = JSON.stringify(values);
-                    let comparison = cache.get(key);
-                    if (!comparison) {
-                        if (evaluations >= maxEvaluations) {
-                            return {
-                                bestTeamState: withValues(original, variables, bestValues),
-                                bestValues, curve, evaluations, truncated: true,
-                            };
-                        }
+                    let evaluation = cache.get(key);
+                    let historyEntry = null;
+                    if (!evaluation) {
+                        if (history.length >= maxEvaluations) return finish("budget");
                         const samples = await run(withValues(original, variables, values));
-                        comparison = comparePaired(baseline, samples);
-                        cache.set(key, comparison);
-                        evaluations++;
-                        const entry = {
-                            playerId: variable.playerId,
-                            abilityHrid: variable.abilityHrid,
-                            triggerIndex: variable.triggerIndex,
-                            value,
-                            step,
-                            comparison,
+                        evaluation = {
+                            id: `evaluation-${history.length}`, values, samples,
+                            comparison: comparePaired(baseline, samples),
+                            contextId: context.id, variableIndex: index, value, step,
                         };
-                        curve.push(entry);
-                        if (comparison.candidateDps > bestDps) {
-                            bestValues = values;
-                            bestDps = comparison.candidateDps;
-                        }
-                        report(entry);
-                    } else if (comparison.candidateDps > bestDps) {
-                        bestValues = values;
-                        bestDps = comparison.candidateDps;
+                        history.push(evaluation);
+                        cache.set(key, evaluation);
+                        historyEntry = evaluation;
                     }
+                    const accepted = evaluation.comparison.candidateDps > best.comparison.candidateDps;
+                    if (accepted) best = evaluation;
+                    const entry = {
+                        id: evaluation.id, historyId: evaluation.id,
+                        contextId: context.id, values: evaluation.values, variableIndex: index,
+                        playerId: variable.playerId, abilityHrid: variable.abilityHrid,
+                        triggerIndex: variable.triggerIndex, value, step, accepted,
+                        baseline: evaluation === history[0], reused: historyEntry === null,
+                        comparison: evaluation.comparison,
+                    };
+                    curve.push(entry);
+                    points.set(value, { value, score: evaluation.comparison.candidateDps });
+                    report(entry, historyEntry, context);
                 }
+                basins[index] = selectBasins(points, variable, step);
             }
         }
     }
-    return {
-        bestTeamState: withValues(original, variables, bestValues),
-        bestValues, curve, evaluations, truncated: false,
-    };
+    checkAbort(signal);
+    return finish("resolution");
 }

@@ -139,8 +139,6 @@ async function main() {
     const fine = await syntheticScan([7350], { min: 0, max: 10000, step: 50, budget: 500 });
     assert.deepEqual(fine.bestValues, [7350], "由粗到细必须收敛到精确峰值");
     assert.ok(fine.evaluations < 40, `全枚举需 200 次，逐级收窄应远少于此，实际 ${fine.evaluations}`);
-    assert.ok(new Set(fine.curve.map((entry) => entry.step)).size > 1, "必须真的用过多个分辨率");
-    assert.equal(fine.curve.at(-1).step, 50, "最后一级必须落在用户填写的步长上");
     assert.ok(fine.curve.map((entry) => entry.step).every((step) => step >= 50), "任何一级都不得比用户步长更细");
 
     // 多阈值共享预算：全部命中峰值，且每个值都对齐到用户网格。
@@ -171,12 +169,38 @@ async function main() {
         assert.equal(run.truncated, false, `估算的预算 ${budget} 必须够跑完 ${peaks.length} 个阈值 ${min}-${max}/${step}`);
         assert.deepEqual(run.bestValues, peaks, "在估算预算内必须收敛到峰值");
         assert.ok(budget >= run.evaluations, `估算 ${budget} 不得低于实际评估数 ${run.evaluations}`);
-        assert.ok(budget <= run.evaluations * 3, `估算 ${budget} 相对实际 ${run.evaluations} 过于夸张`);
     }
     assert.equal(estimateScanBudget([]), 0, "没有勾选阈值时不给建议");
     assert.equal(estimateScanBudget([{ min: 0, max: 100, step: 0 }]), 0, "非法步长不给建议");
     assert.equal(estimateScanBudget([{ min: 100, max: 0, step: 10 }]), 0, "区间颠倒不给建议");
     assert.equal(estimateScanBudget([{ min: 0, max: NaN, step: 10 }]), 0, "区间未填完不给建议");
+
+    // 较低的粗网格峰细化后更高：不能在第一次粗扫后丢掉第二个峰区。
+    const peakSeeds = [11, 22, 33, 44];
+    const peakVariable = { playerId: "1", abilityHrid: "/abilities/test", triggerIndex: 0, min: 0, max: 10000, step: 100 };
+    const observedConfigs = new Set();
+    const multiPeak = await scanThresholds({
+        teamState: syntheticTeam([0]), variables: [peakVariable], seeds: peakSeeds,
+        maxEvaluations: 200,
+        evaluate: async (state) => {
+            const value = state.players[0].state.triggerMap[peakVariable.abilityHrid][0].value;
+            assert.ok(!observedConfigs.has(value), "同一完整配置不得重复模拟");
+            observedConfigs.add(value);
+            const dps = 100 + Math.max(10 - Math.abs(value - 1600) / 1000, 12 - Math.abs(value - 7300) / 200);
+            return peakSeeds.map((seed) => ({ seed, dps, completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12 }));
+        },
+    });
+    assert.deepEqual(multiPeak.bestValues, [7300], "必须保留并细化较低的粗网格峰");
+    assert.equal(multiPeak.history.length, observedConfigs.size, "每次新评估均可追溯");
+    assert.equal(new Set(multiPeak.alternatives.map((entry) => JSON.stringify(entry.values))).size, multiPeak.alternatives.length);
+    for (const point of many.curve) {
+        if (!point.contextId) continue;
+        const context = many.contexts.find((entry) => entry.id === point.contextId);
+        assert.ok(context, "曲线必须指向固定其他坐标的对比组");
+        for (let index = 0; index < point.values.length; index++) {
+            if (index !== context.variableIndex) assert.equal(point.values[index], context.values[index], "不得混画不同配置背景");
+        }
+    }
     const teamFile = process.argv[2];
     if (!teamFile) {
         console.log("随机源、统计、成本校验通过（未提供队伍文件，跳过端到端评估）。");

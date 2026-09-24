@@ -1458,6 +1458,13 @@
                                 </div>
                             </div>
                             <div class="row mb-1">
+                                <label for="optInputSearchCount" class="col-md-3 col-form-label" data-i18n="common:optimizer.searchCount">Exploration dungeon attempts</label>
+                                <div class="col-md">
+                                    <input type="number" id="optInputSearchCount" class="form-control" min="1" max="10000" value="200" required />
+                                    <small class="text-muted" data-i18n="common:optimizer.searchCountHint">Exploration uses fewer attempts; the winner is validated at full count on independent seeds.</small>
+                                </div>
+                            </div>
+                            <div class="row mb-1">
                                 <label for="optInputMaxEvaluations" class="col-md-3 col-form-label" data-i18n="common:optimizer.maxEvaluations">Maximum evaluations</label>
                                 <div class="col-md">
                                     <input type="number" id="optInputMaxEvaluations" class="form-control" min="5" max="500" value="60" required />
