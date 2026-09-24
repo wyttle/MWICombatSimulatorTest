@@ -394,6 +394,43 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         renderCandidates();
     }
 
+    // 触发条件改动逐条列出：只显示有变化的条件，数值改动写成「旧 → 新」。
+    function describeTrigger(trigger) {
+        const parts = element("span");
+        parts.append(element("span", "", `combatTriggerDependencyNames.${trigger.dependencyHrid}`), document.createTextNode(" · "),
+            element("span", "", `combatTriggerConditionNames.${trigger.conditionHrid}`), document.createTextNode(" "),
+            element("span", "", `combatTriggerComparatorNames.${trigger.comparatorHrid}`));
+        if (combatTriggerComparatorDetailMap[trigger.comparatorHrid]?.allowValue) parts.append(document.createTextNode(` ${format(Number(trigger.value), 0)}`));
+        return parts;
+    }
+
+    function describeTriggerChange(change) {
+        const list = element("ul", "mb-0 small");
+        const before = change.before ?? [];
+        const after = change.after ?? [];
+        for (let index = 0; index < Math.max(before.length, after.length); index++) {
+            const old = before[index];
+            const next = after[index];
+            if (JSON.stringify(old) === JSON.stringify(next)) continue;
+            const row = element("li");
+            row.append(label("result.triggerCondition", "me-1", { index: index + 1 }));
+            if (!old) {
+                row.append(label("result.triggerAdded", "me-1"), describeTrigger(next));
+            } else if (!next) {
+                row.append(label("result.triggerRemoved", "me-1"), describeTrigger(old));
+            } else if (old.dependencyHrid === next.dependencyHrid && old.conditionHrid === next.conditionHrid && old.comparatorHrid === next.comparatorHrid) {
+                const arrow = element("strong", "ms-1");
+                arrow.textContent = `→ ${format(Number(next.value), 0)}`;
+                row.append(describeTrigger(old), arrow);
+            } else {
+                row.append(describeTrigger(old), document.createTextNode(" → "), describeTrigger(next));
+            }
+            list.append(row);
+        }
+        if (!list.childElementCount) list.append(element("li", "", "common:optimizer.result.triggerChange"));
+        return list;
+    }
+
     function describeChanges(changes) {
         const list = element("ul", "mb-2");
         for (const change of changes) {
@@ -409,7 +446,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             } else if (change.kind === "house") {
                 row.append(element("span", "me-2", `houseRoomNames.${change.roomHrid}`), document.createTextNode(`${change.before} → ${change.after}`));
             } else {
-                row.append(element("span", "me-2", `abilityNames.${change.abilityHrid}`), label("result.triggerChange"));
+                row.append(element("span", "me-2", `abilityNames.${change.abilityHrid}`), describeTriggerChange(change));
             }
             list.append(row);
         }
@@ -660,6 +697,13 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             });
             selectionLabel.append(selection, label("selectCandidate"));
             card.append(heading, selectionLabel);
+            const changeDetails = element("div");
+            changeDetails.append(label("result.candidateChanges", "d-block fw-semibold mb-1"), describeChanges(result.candidateChanges));
+            if (result.draftChanges.length) {
+                changeDetails.append(label("result.draftChanges", "d-block fw-semibold mb-1"), describeChanges(result.draftChanges));
+                changeDetails.append(element("p", "small text-muted mb-2", "common:optimizer.result.draftComparisonNote"));
+            }
+            appendDetailsSection(card, "result.changes", changeDetails);
             const comparison = result.comparison;
             appendMetric(card, "result.baselineDps", format(comparison.baselineDps));
             appendMetric(card, "result.candidateDps", format(comparison.candidateDps));
@@ -685,13 +729,6 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             }
             appendMetric(card, "result.efficiency", efficiency);
             appendMetric(card, "result.consumableDelta", Number.isFinite(result.consumableCost.coinPerHourDelta) ? format(result.consumableCost.coinPerHourDelta) : label("result.unknownPrice"));
-            const changeDetails = element("div");
-            changeDetails.append(label("result.candidateChanges", "d-block fw-semibold mb-1"), describeChanges(result.candidateChanges));
-            if (result.draftChanges.length) {
-                changeDetails.append(label("result.draftChanges", "d-block fw-semibold mb-1"), describeChanges(result.draftChanges));
-                changeDetails.append(element("p", "small text-muted mb-2", "common:optimizer.result.draftComparisonNote"));
-            }
-            appendDetailsSection(card, "result.changes", changeDetails);
             // 只改触发条件时没有任何买卖，成本明细整节不显示。
             if (result.cost.lines.length) appendDetailsSection(card, "result.costDetails", renderPriceLines(result.cost.lines));
             // 缺价项保留为未知；仅过滤确定的零值，不修改导出报告中的原始明细。
