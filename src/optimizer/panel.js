@@ -783,15 +783,18 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 ? seedList(masterSeed, settings.seedCount * 2).slice(settings.seedCount)
                 : seeds;
             report.validationSeeds = validationSeeds;
-            const evaluate = (teamState, start, width, exploration = false) => runner.evaluate(teamStateToDTOs(teamState), {
-                zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels,
-                dungeonCount: exploration ? settings.searchDungeonCount : settings.dungeonCount,
-                seeds: exploration ? seeds : validationSeeds, signal,
-                onProgress: ({ finished, total, progress }) => {
-                    status("status.running", { done: finished, total });
-                    setProgress(start + width * (Number.isFinite(progress) ? progress : finished / total));
-                },
-            });
+            const evaluateBatch = (teamStates, { start, width, exploration = false, onResult }) => runner.evaluateBatch(
+                teamStates.map((teamState) => ({
+                    players: teamStateToDTOs(teamState),
+                    dungeonCount: exploration ? settings.searchDungeonCount : settings.dungeonCount,
+                    seeds: exploration ? seeds : validationSeeds,
+                })), {
+                    zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels, signal, onResult,
+                    onProgress: ({ finished, total, progress }) => {
+                        status("status.running", { done: finished, total });
+                        setProgress(start + width * (Number.isFinite(progress) ? progress : finished / total));
+                    },
+                });
             let pairedStart = 0;
             if (scan) {
                 let evaluations = 0;
@@ -799,7 +802,11 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 updateActions();
                 const search = await scanThresholds({
                     teamState: cloneTeamState(draftTeamState), variables: scanVariables,
-                    evaluate: (teamState) => evaluate(teamState, 80 * evaluations / settings.maxEvaluations, 80 / settings.maxEvaluations, true),
+                    evaluateBatch: (teamStates, onResult) => evaluateBatch(teamStates, {
+                        start: 80 * evaluations / settings.maxEvaluations,
+                        width: 80 * teamStates.length / settings.maxEvaluations,
+                        exploration: true, onResult,
+                    }),
                     seeds, maxEvaluations: settings.maxEvaluations, signal,
                     onProgress: (progress) => {
                         evaluations = progress.evaluations;
@@ -808,7 +815,6 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                         if (progress.context && !report.scan.contexts.some((context) => context.id === progress.context.id)) report.scan.contexts.push(progress.context);
                         if (progress.historyEntry) report.scan.history.push(progress.historyEntry);
                         if (progress.entry) report.scan.curve.push(progress.entry);
-                        setProgress(80 * evaluations / settings.maxEvaluations);
                     },
                 });
                 signal.throwIfAborted();
@@ -818,26 +824,39 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 pairedStart = 80;
             }
             // 最终验证用未参与搜索的 seed，避免把搜索择优偏差当成可靠收益。
-            const width = (100 - pairedStart) / (teams.length + 1);
-            const baselineSamples = await evaluate(originalTeamState, pairedStart, width);
-            report.baselineSamples = baselineSamples;
-            // 装备候选以运行时草稿为起点；收益与总成本仍相对原始队伍，归因单独保留。
+            // 原方案与全部候选整批并行；候选结果按顺序在原方案完成后逐个展示。
             const draftChanges = equipmentRun ? changesBetween(report.originalTeamState, report.draftTeamState) : [];
-            for (const [index, teamState] of teams.entries()) {
-                signal.throwIfAborted();
-                const samples = await evaluate(teamState, pairedStart + width * (index + 1), width);
-                signal.throwIfAborted();
-                const changes = changesBetween(originalTeamState, teamState);
-                const result = {
-                    teamState, changes, samples, comparison: comparePaired(baselineSamples, samples),
-                    candidateChanges: equipmentRun ? changesBetween(report.draftTeamState, teamState) : changes,
-                    draftChanges,
-                    cost: priceChanges(changes, prices), consumableCost: priceConsumableDelta(baselineSamples, samples, prices),
-                };
-                results.push(result);
-                if (results.length === 1) selectedTeamState = result.teamState;
-                renderResults();
-            }
+            const batch = [originalTeamState, ...teams];
+            const completed = new Array(batch.length);
+            let shown = 0;
+            const flush = () => {
+                const baselineSamples = completed[0];
+                if (!baselineSamples) return;
+                report.baselineSamples = baselineSamples;
+                while (shown < teams.length && completed[shown + 1]) {
+                    const teamState = teams[shown];
+                    const samples = completed[shown + 1];
+                    const changes = changesBetween(originalTeamState, teamState);
+                    results.push({
+                        teamState, changes, samples, comparison: comparePaired(baselineSamples, samples),
+                        candidateChanges: equipmentRun ? changesBetween(report.draftTeamState, teamState) : changes,
+                        draftChanges,
+                        cost: priceChanges(changes, prices), consumableCost: priceConsumableDelta(baselineSamples, samples, prices),
+                    });
+                    if (results.length === 1) selectedTeamState = results[0].teamState;
+                    shown++;
+                    renderResults();
+                }
+            };
+            await evaluateBatch(batch, {
+                start: pairedStart, width: 100 - pairedStart,
+                onResult: (index, samples) => {
+                    completed[index] = samples;
+                    flush();
+                },
+            });
+            signal.throwIfAborted();
+            flush();
             report.draftTeamState = cloneTeamState(draftTeamState);
             report.status = "done";
             status(report.scan?.truncated ? "scanTruncated" : "status.done");

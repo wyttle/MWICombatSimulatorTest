@@ -52,20 +52,27 @@ export class EvaluationRunner {
         this.disposed = false;
     }
 
-    async evaluate(players, { zone, extra, guildShrineLevels, dungeonCount, seeds, signal, onProgress }) {
+    // jobs: [{ players, dungeonCount, seeds }]。任务按「配置 × seed」排队，空闲线程立即接下一个，
+    // 避免 seed 数不是线程数整数倍时每套配置都等最后一波。任务按配置顺序派发，靠前的配置先完成。
+    async evaluateBatch(jobs, { zone, extra, guildShrineLevels, signal, onProgress, onResult }) {
         if (this.disposed) throw new Error("模拟器已释放");
         if (this.cancel) throw new Error("模拟正在运行");
         if (signal?.aborted) throw abortError();
-        if (!Number.isInteger(dungeonCount) || dungeonCount < 1) {
-            throw new RangeError("地下城次数必须是正整数");
+        if (!Array.isArray(jobs) || !jobs.length) throw new Error("没有待评估的配置");
+        for (const { dungeonCount, seeds } of jobs) {
+            if (!Number.isInteger(dungeonCount) || dungeonCount < 1) {
+                throw new RangeError("地下城次数必须是正整数");
+            }
+            if (!Array.isArray(seeds) || !seeds.length || new Set(seeds).size !== seeds.length ||
+                seeds.some((seed) => !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff)) {
+                throw new Error("seed 必须是互不相同的 uint32 整数");
+            }
         }
-        if (!Array.isArray(seeds) || !seeds.length || new Set(seeds).size !== seeds.length ||
-            seeds.some((seed) => !Number.isInteger(seed) || seed < 0 || seed > 0xffffffff)) {
-            throw new Error("seed 必须是互不相同的 uint32 整数");
-        }
+        const tasks = jobs.flatMap((job, jobIndex) => job.seeds.map((seed, seedIndex) => ({ jobIndex, seedIndex, seed })));
         return new Promise((resolve, reject) => {
-            const samples = new Array(seeds.length);
-            const fractions = new Array(seeds.length).fill(0);
+            const samples = jobs.map((job) => new Array(job.seeds.length));
+            const remaining = jobs.map((job) => job.seeds.length);
+            const fractions = new Array(tasks.length).fill(0);
             let next = 0;
             let finished = 0;
             let settled = false;
@@ -88,34 +95,36 @@ export class EvaluationRunner {
             const cancel = () => fail(abortError());
             this.cancel = cancel;
             signal?.addEventListener("abort", cancel, { once: true });
-            const report = (index, completed, failed) => {
+            const report = (completed, failed) => {
                 onProgress?.({
                     finished,
-                    total: seeds.length,
-                    seed: seeds[index],
-                    progress: fractions.reduce((sum, value) => sum + value, 0) / seeds.length,
+                    total: tasks.length,
+                    progress: fractions.reduce((sum, value) => sum + value, 0) / tasks.length,
                     completed,
                     failed,
                 });
             };
             const launch = (worker) => {
-                if (settled || next >= seeds.length) return;
-                const index = next++;
+                if (settled || next >= tasks.length) return;
+                const taskIndex = next++;
+                const { jobIndex, seedIndex, seed } = tasks[taskIndex];
                 worker.onmessage = ({ data }) => {
                     if (settled) return;
                     try {
                         if (data.type === "simulation_error") {
                             fail(new Error(String(data.error)));
                         } else if (data.type === "simulation_progress") {
-                            if (Number.isFinite(data.progress)) fractions[index] = Math.max(0, Math.min(1, data.progress));
-                            report(index, data.completed, data.failed);
+                            if (Number.isFinite(data.progress)) fractions[taskIndex] = Math.max(0, Math.min(1, data.progress));
+                            report(data.completed, data.failed);
                         } else if (data.type === "simulation_result") {
-                            samples[index] = toSample(seeds[index], data.simResult);
-                            fractions[index] = 1;
+                            const sample = toSample(seed, data.simResult);
+                            samples[jobIndex][seedIndex] = sample;
+                            fractions[taskIndex] = 1;
                             finished++;
-                            report(index, samples[index].completed, samples[index].failed);
+                            report(sample.completed, sample.failed);
+                            if (--remaining[jobIndex] === 0) onResult?.(jobIndex, samples[jobIndex]);
                             if (settled) return;
-                            if (finished === seeds.length) {
+                            if (finished === tasks.length) {
                                 settled = true;
                                 cleanup();
                                 resolve(samples);
@@ -131,16 +140,16 @@ export class EvaluationRunner {
                 worker.onmessageerror = () => fail(new Error("模拟线程消息无法解析"));
                 worker.postMessage({
                     type: "start_dungeon_by_count",
-                    players,
+                    players: jobs[jobIndex].players,
                     zone,
                     extra,
                     guildShrineLevels,
-                    targetCount: dungeonCount,
-                    seed: seeds[index],
+                    targetCount: jobs[jobIndex].dungeonCount,
+                    seed,
                 });
             };
             try {
-                const count = Math.min(this.concurrency, seeds.length);
+                const count = Math.min(this.concurrency, tasks.length);
                 while (this.workers.length < count) {
                     this.workers.push(new Worker(new URL("../worker.js", import.meta.url)));
                 }

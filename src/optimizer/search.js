@@ -113,7 +113,8 @@ export function estimateScanBudget(variables) {
     return total;
 }
 
-export async function scanThresholds({ teamState, variables, evaluate, seeds, maxEvaluations, signal, onProgress }) {
+// evaluateBatch(states, onResult) 同时评估多套配置；onResult(index, samples) 在单套完成时回报，返回按输入顺序排列的样本。
+export async function scanThresholds({ teamState, variables, evaluateBatch, seeds, maxEvaluations, signal, onProgress }) {
     if (!Array.isArray(variables) || !variables.length) throw new Error("没有可扫描的触发条件");
     if (!Number.isInteger(maxEvaluations) || maxEvaluations < 1) throw new Error("最大评估次数必须是正整数");
     if (!Array.isArray(seeds) || !seeds.length || new Set(seeds).size !== seeds.length ||
@@ -135,17 +136,21 @@ export async function scanThresholds({ teamState, variables, evaluate, seeds, ma
         return value;
     });
     const expectedSeeds = new Set(seeds);
-    const run = async (state) => {
-        checkAbort(signal);
-        const samples = await evaluate(state);
-        checkAbort(signal);
+    const checkSamples = (samples) => {
         if (!Array.isArray(samples) || samples.length !== seeds.length ||
             new Set(samples.map((sample) => sample.seed)).size !== seeds.length ||
             samples.some((sample) => !expectedSeeds.has(sample.seed))) throw new Error("扫描样本 seed 不匹配");
         return samples;
     };
+    const runBatch = async (states, onResult) => {
+        checkAbort(signal);
+        const results = await evaluateBatch(states, (index, samples) => onResult?.(index, checkSamples(samples)));
+        checkAbort(signal);
+        if (!Array.isArray(results) || results.length !== states.length) throw new Error("批量评估结果数量不匹配");
+        return results.map(checkSamples);
+    };
     const original = cloneTeamState(teamState);
-    const baseline = await run(cloneTeamState(original));
+    const [baseline] = await runBatch([cloneTeamState(original)]);
     const initialComparison = comparePaired(baseline, baseline);
     const history = [{
         id: "evaluation-0", values: [...originalValues], samples: baseline, comparison: initialComparison,
@@ -203,41 +208,58 @@ export async function scanThresholds({ teamState, variables, evaluate, seeds, ma
                 const candidates = level === 0
                     ? coarseValues(variable, step)
                     : refinementValues(variable, basins[index], step);
-                const points = new Map();
-                // 原始阈值即使不在指定网格上也保留为对照，不生成越界的新阈值。
-                for (const value of new Set([fixedValues[index], ...candidates])) {
-                    checkAbort(signal);
+                const ordered = [...new Set([fixedValues[index], ...candidates])].map((value) => {
                     const values = [...fixedValues];
                     values[index] = value;
-                    const key = JSON.stringify(values);
-                    let evaluation = cache.get(key);
-                    let historyEntry = null;
-                    if (!evaluation) {
-                        if (history.length >= maxEvaluations) return finish("budget");
-                        const samples = await run(withValues(original, variables, values));
-                        evaluation = {
-                            id: `evaluation-${history.length}`, values, samples,
-                            comparison: comparePaired(baseline, samples),
-                            contextId: context.id, variableIndex: index, value, step,
+                    return { value, values, key: JSON.stringify(values) };
+                });
+                // 同一层候选互不依赖：未缓存的点整批并行，结果仍按候选顺序处理，与逐个评估完全一致。
+                const pending = ordered.filter((point) => !cache.has(point.key)).slice(0, Math.max(0, maxEvaluations - history.length));
+                const pendingIndex = new Map(pending.map((point, position) => [point.key, position]));
+                const completed = new Array(pending.length);
+                const points = new Map();
+                let cursor = 0;
+                const flush = () => {
+                    while (cursor < ordered.length) {
+                        const { value, values, key } = ordered[cursor];
+                        let evaluation = cache.get(key);
+                        let historyEntry = null;
+                        if (!evaluation) {
+                            const position = pendingIndex.get(key);
+                            if (position === undefined || !completed[position]) return;
+                            evaluation = {
+                                id: `evaluation-${history.length}`, values, samples: completed[position],
+                                comparison: comparePaired(baseline, completed[position]),
+                                contextId: context.id, variableIndex: index, value, step,
+                            };
+                            history.push(evaluation);
+                            cache.set(key, evaluation);
+                            historyEntry = evaluation;
+                        }
+                        const accepted = evaluation.comparison.candidateDps > best.comparison.candidateDps;
+                        if (accepted) best = evaluation;
+                        const entry = {
+                            id: evaluation.id, historyId: evaluation.id,
+                            contextId: context.id, values: evaluation.values, variableIndex: index,
+                            playerId: variable.playerId, abilityHrid: variable.abilityHrid,
+                            triggerIndex: variable.triggerIndex, value, step, accepted,
+                            baseline: evaluation === history[0], reused: historyEntry === null,
+                            comparison: evaluation.comparison,
                         };
-                        history.push(evaluation);
-                        cache.set(key, evaluation);
-                        historyEntry = evaluation;
+                        curve.push(entry);
+                        points.set(value, { value, score: evaluation.comparison.candidateDps });
+                        report(entry, historyEntry, context);
+                        cursor++;
                     }
-                    const accepted = evaluation.comparison.candidateDps > best.comparison.candidateDps;
-                    if (accepted) best = evaluation;
-                    const entry = {
-                        id: evaluation.id, historyId: evaluation.id,
-                        contextId: context.id, values: evaluation.values, variableIndex: index,
-                        playerId: variable.playerId, abilityHrid: variable.abilityHrid,
-                        triggerIndex: variable.triggerIndex, value, step, accepted,
-                        baseline: evaluation === history[0], reused: historyEntry === null,
-                        comparison: evaluation.comparison,
-                    };
-                    curve.push(entry);
-                    points.set(value, { value, score: evaluation.comparison.candidateDps });
-                    report(entry, historyEntry, context);
+                };
+                if (pending.length) {
+                    await runBatch(pending.map((point) => withValues(original, variables, point.values)), (position, samples) => {
+                        completed[position] = samples;
+                        flush();
+                    });
                 }
+                flush();
+                if (cursor < ordered.length) return finish("budget");
                 basins[index] = selectBasins(points, variable, step);
             }
         }

@@ -120,16 +120,27 @@ async function main() {
             state: { triggerMap: { "/abilities/test": [{ conditionHrid: "/c", comparatorHrid: "/combat_trigger_comparators/greater_than_equal", value }] } },
         })),
     });
-    const syntheticScan = async (peaks, { min, max, step, budget }) => {
+    // 把单配置评估函数包装成批量接口；reverse 时倒序完成，模拟并行线程乱序返回。
+    const batchOf = (evaluateOne, { reverse = false } = {}) => async (states, onResult) => {
+        const results = new Array(states.length);
+        const order = states.map((_, index) => index);
+        if (reverse) order.reverse();
+        for (const index of order) {
+            results[index] = await evaluateOne(states[index]);
+            onResult?.(index, results[index]);
+        }
+        return results;
+    };
+    const syntheticScan = async (peaks, { min, max, step, budget }, options) => {
         const scanSeeds = [1, 2, 3, 4];
         return scanThresholds({
             teamState: syntheticTeam(peaks.map(() => min)),
             variables: peaks.map((_, index) => ({ playerId: String(index + 1), abilityHrid: "/abilities/test", triggerIndex: 0, min, max, step })),
-            evaluate: async (state) => {
+            evaluateBatch: batchOf(async (state) => {
                 const values = state.players.map((player) => player.state.triggerMap["/abilities/test"][0].value);
                 const distance = values.reduce((sum, value, index) => sum + Math.abs(value - peaks[index]), 0);
                 return scanSeeds.map((seed) => ({ seed, dps: 1000 - distance / 100, completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12, consumablesUsed: {} }));
-            },
+            }, options),
             seeds: scanSeeds,
             maxEvaluations: budget,
         });
@@ -152,6 +163,17 @@ async function main() {
     assert.equal(tight.truncated, true, "预算耗尽必须如实标记");
     assert.ok(tight.evaluations <= 40, "扫描不得超出评估预算");
     assert.ok(new Set(tight.curve.map((entry) => `${entry.playerId}`)).size >= 5, "预算不足时也要覆盖到多个阈值，而不是耗在前几个上");
+
+    // 并行乱序完成不得改变搜索结果：历史顺序、曲线和最优值必须与顺序完成一致。
+    for (const budget of [40, 500]) {
+        const peaks = [3200, 3600, 4400, 5000];
+        const inOrder = await syntheticScan(peaks, { min: 3000, max: 6000, step: 200, budget });
+        const shuffled = await syntheticScan(peaks, { min: 3000, max: 6000, step: 200, budget }, { reverse: true });
+        assert.deepEqual(shuffled.history.map((entry) => entry.values), inOrder.history.map((entry) => entry.values), "乱序完成不得改变评估记录顺序");
+        assert.deepEqual(shuffled.curve.map((entry) => [entry.id, entry.accepted]), inOrder.curve.map((entry) => [entry.id, entry.accepted]), "乱序完成不得改变曲线与接受顺序");
+        assert.deepEqual(shuffled.bestValues, inOrder.bestValues);
+        assert.equal(shuffled.stopReason, inOrder.stopReason);
+    }
 
     // 6b. 预算估算：界面用它替用户填「最大评估次数」，必须真的够跑完，否则提示会骗人。
     const budgetCases = [
@@ -182,13 +204,13 @@ async function main() {
     const multiPeak = await scanThresholds({
         teamState: syntheticTeam([0]), variables: [peakVariable], seeds: peakSeeds,
         maxEvaluations: 200,
-        evaluate: async (state) => {
+        evaluateBatch: batchOf(async (state) => {
             const value = state.players[0].state.triggerMap[peakVariable.abilityHrid][0].value;
             assert.ok(!observedConfigs.has(value), "同一完整配置不得重复模拟");
             observedConfigs.add(value);
             const dps = 100 + Math.max(10 - Math.abs(value - 1600) / 1000, 12 - Math.abs(value - 7300) / 200);
             return peakSeeds.map((seed) => ({ seed, dps, completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12 }));
-        },
+        }),
     });
     assert.deepEqual(multiPeak.bestValues, [7300], "必须保留并细化较低的粗网格峰");
     assert.equal(multiPeak.history.length, observedConfigs.size, "每次新评估均可追溯");
@@ -264,7 +286,7 @@ async function main() {
     const scan = await scanThresholds({
         teamState: cloneTeamState(teamState),
         variables: [{ playerId: target.playerId, abilityHrid: target.abilityHrid, triggerIndex: target.triggerIndex, min: Math.max(0, base0 - 400), max: base0 + 400, step: 400 }],
-        evaluate,
+        evaluateBatch: batchOf(evaluate),
         maxEvaluations: 4,
         seeds: [11, 12],
     });
