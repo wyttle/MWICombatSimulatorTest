@@ -54,7 +54,8 @@ export class EvaluationRunner {
 
     // jobs: [{ players, dungeonCount, seeds }]。任务按「配置 × seed」排队，空闲线程立即接下一个，
     // 避免 seed 数不是线程数整数倍时每套配置都等最后一波。任务按配置顺序派发，靠前的配置先完成。
-    async evaluateBatch(jobs, { zone, extra, guildShrineLevels, signal, onProgress, onResult }) {
+    // onSample(jobIndex, seedIndex, sample) 在每个 seed 完成时回报，用于检查点逐 seed 落盘。
+    async evaluateBatch(jobs, { zone, extra, guildShrineLevels, signal, onProgress, onResult, onSample }) {
         if (this.disposed) throw new Error("模拟器已释放");
         if (this.cancel) throw new Error("模拟正在运行");
         if (signal?.aborted) throw abortError();
@@ -122,6 +123,7 @@ export class EvaluationRunner {
                             fractions[taskIndex] = 1;
                             finished++;
                             report(sample.completed, sample.failed);
+                            onSample?.(jobIndex, seedIndex, sample);
                             if (--remaining[jobIndex] === 0) onResult?.(jobIndex, samples[jobIndex]);
                             if (settled) return;
                             if (finished === tasks.length) {

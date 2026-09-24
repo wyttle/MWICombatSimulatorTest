@@ -9,13 +9,15 @@ import { scanThresholds, estimateScanBudget } from "./search.js";
 import { WORKER_PEAK_MB } from "../workerBudget.js";
 import { resolveScanVariables } from "./ranges.js";
 import { renderSearchAnalysis } from "./searchPlot.js";
+import { clearReports, deleteReport, deleteRun, jobKey, listReports, listRuns, loadSamples, saveReport, saveRun, saveSample } from "./store.js";
 
 const EQUIPMENT_SLOTS = ["head", "body", "legs", "feet", "hands", "main_hand", "two_hand", "off_hand", "pouch", "neck", "earrings", "ring", "back", "charm"].map((slot) => `/equipment_types/${slot}`);
 
 export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices }) {
-    const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optMemoryEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
+    const ids = ["optimizerModal", "optParticipants", "optButtonSelectAllPlayers", "optSelectDungeon", "optSelectDifficulty", "optInputDungeonCount", "optInputParallelCount", "optParallelCountDisplay", "optInputSeedCount", "optInputMaxEvaluations", "optScanEstimate", "optMemoryEstimate", "optTabTriggers", "optTabUpgrades", "optTabResults", "optTabHistory", "optHistory", "optButtonClearHistory", "optTriggerContainer", "optSelectPlayer", "optSelectSlot", "optSelectItem", "optInputEnhancement", "optButtonAddCandidate", "optCandidateList", "optButtonGenerateUpgrades", "optStatus", "optProgress", "optResults", "optButtonRun", "optButtonScan", "optButtonStop", "optButtonApply", "optButtonExport"];
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     ui.optInputSearchCount = document.getElementById("optInputSearchCount");
+    ui.optRunningBadge = document.getElementById("optRunningBadge");
     const modal = ui.optimizerModal;
     let snapshot = null;
     let originalTeamState = null;
@@ -156,18 +158,24 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         ui.optButtonExport.disabled = !report;
     }
 
+    // 运行期间仍可关闭窗口、切换标签页、查看结果与历史；运行在后台继续，只有「中止模拟」会停止它。
+    function keepEnabled(control) {
+        return control === ui.optButtonStop || control.matches("[data-bs-dismiss], [data-bs-toggle='tab']") ||
+            ui.optResults.contains(control) || ui.optHistory.contains(control);
+    }
+
     function setRunning(value) {
         running = value;
+        ui.optRunningBadge?.classList.toggle("d-none", !value);
         if (value) {
             disabledControls = new Map();
             for (const control of modal.querySelectorAll("button, input, select")) {
+                if (keepEnabled(control)) continue;
                 disabledControls.set(control, control.disabled);
-                control.disabled = control !== ui.optButtonStop;
+                control.disabled = true;
             }
         } else {
-            for (const control of modal.querySelectorAll("button, input, select")) {
-                control.disabled = disabledControls.get(control) ?? false;
-            }
+            for (const [control, disabled] of disabledControls) control.disabled = disabled;
             disabledControls.clear();
         }
         updateActions();
@@ -626,6 +634,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
 
     function renderResults() {
         ui.optResults.replaceChildren();
+        if (report) ui.optResults.append(reportHeader(report));
+        if (!results.length && !report?.scan) ui.optResults.append(label("noResults", "d-block text-muted"));
         if (report?.scan && results.length) ui.optResults.append(label("holdoutNote", "d-block alert alert-info"));
         for (const [index, result] of results.entries()) {
             const card = element("section", "border rounded p-3 mb-3");
@@ -705,8 +715,16 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 playerName: (id) => t("player", { id }),
                 onSelect: (alternative) => {
                     if (running) return status("errors.running");
+                    if (!rosterDraft) return status("errors.noTeam");
+                    // 历史报告的参战队员可能与当前勾选不同：按报告的参战名单载入，名单里缺人则拒绝。
+                    const ids = (report.activeIds ?? activeIds).map(String);
+                    const roster = rosterDraft.players.map((player) => player.id);
+                    if (!ids.every((id) => roster.includes(id))) return status("errors.rosterMismatch");
+                    activeIds = roster.filter((id) => ids.includes(id));
                     draftTeamState = cloneTeamState(alternative.teamState);
+                    syncActiveTeams();
                     selectedTeamState = null;
+                    renderParticipants();
                     renderTriggers();
                     window.bootstrap.Tab.getOrCreateInstance(ui.optTabTriggers).show();
                     status("alternativeLoaded");
@@ -718,6 +736,110 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
 
     function showResults() {
         window.bootstrap.Tab.getOrCreateInstance(ui.optTabResults).show();
+    }
+
+    // 结果页顶部标明这是哪一轮：从历史或上次会话恢复的报告与当前主界面队伍未必一致。
+    function reportHeader(shown) {
+        const header = element("div", "small text-muted mb-2");
+        const time = element("span", "me-2");
+        time.textContent = new Date(shown.finishedAt ?? shown.createdAt ?? Date.now()).toLocaleString(window.i18next.language);
+        header.append(label("history.shownRun", "me-2"), time, label(`history.kinds.${shown.kind ?? "triggers"}`, "badge bg-secondary me-2"));
+        if (shown.settings?.zone) {
+            header.append(element("span", "me-1", `actionNames.${shown.settings.zone.zoneHrid}`), document.createTextNode(` T${shown.settings.zone.difficultyTier}`));
+        }
+        if (shown.resumed) header.append(label("history.resumed", "badge bg-info text-dark ms-2"));
+        return header;
+    }
+
+    function showReport(saved) {
+        report = saved;
+        results = saved.results ?? [];
+        selectedTeamState = results[0]?.teamState ?? null;
+        renderResults();
+        showResults();
+        updateActions();
+        void renderHistory();
+    }
+
+    async function restoreLatest() {
+        let latest;
+        try {
+            [latest] = await listReports();
+        } catch (error) {
+            console.error(error);
+            return;
+        }
+        if (latest && !report && !running) showReport(latest);
+    }
+
+    async function renderHistory() {
+        let reports;
+        try {
+            reports = await listReports();
+        } catch (error) {
+            console.error(error);
+            ui.optHistory.replaceChildren(label("history.unavailable", "text-muted"));
+            translate();
+            return;
+        }
+        ui.optHistory.replaceChildren();
+        if (!reports.length) ui.optHistory.append(label("history.empty", "text-muted"));
+        for (const saved of reports) {
+            const row = element("div", "border rounded p-2 mb-2 d-flex flex-wrap align-items-center gap-2");
+            const info = element("div", "flex-grow-1");
+            const time = element("span", "fw-semibold me-2");
+            time.textContent = new Date(saved.finishedAt ?? saved.createdAt).toLocaleString(window.i18next.language);
+            info.append(time, label(`history.kinds.${saved.kind ?? "triggers"}`, "badge bg-secondary me-2"), label(`history.statuses.${saved.status}`, "me-2"));
+            if (saved.settings?.zone) {
+                info.append(element("span", "me-1", `actionNames.${saved.settings.zone.zoneHrid}`), document.createTextNode(` T${saved.settings.zone.difficultyTier} `));
+            }
+            const best = saved.results?.[0]?.comparison;
+            const summary = element("div", "small text-muted");
+            if (best) summary.append(label("history.delta", "me-2", { delta: format(best.deltaDps), low: format(best.ciLow), high: format(best.ciHigh) }));
+            if ((saved.results?.length ?? 0) > 1) summary.append(label("history.candidates", "me-2", { count: saved.results.length }));
+            if (saved.scan) summary.append(label("history.evaluations", "me-2", { count: saved.scan.evaluations }));
+            if (!best && !saved.scan) summary.append(label("noResults"));
+            info.append(summary);
+            row.append(info);
+            if (saved.id === report?.id) row.append(label("history.current", "badge bg-primary"));
+            const view = element("button", "btn btn-outline-primary btn-sm", "common:optimizer.history.view");
+            view.type = "button";
+            view.addEventListener("click", () => {
+                if (running) return status("errors.running");
+                showReport(saved);
+            });
+            const remove = element("button", "btn btn-outline-danger btn-sm", "common:optimizer.history.delete");
+            remove.type = "button";
+            remove.addEventListener("click", async () => {
+                try {
+                    await deleteReport(saved.id);
+                } catch (error) {
+                    console.error(error);
+                    return status("status.error");
+                }
+                if (saved.id === report?.id && !running) resetResults();
+                void renderHistory();
+            });
+            row.append(view, remove);
+            ui.optHistory.append(row);
+        }
+        translate();
+    }
+
+    async function resumePending() {
+        let plans;
+        try {
+            plans = await listRuns();
+        } catch (error) {
+            console.error(error);
+            return;
+        }
+        plans.sort((left, right) => left.createdAt - right.createdAt);
+        // 未点「中止模拟」就关闭页面的运行：按原计划续跑，其他标签页正在执行的计划会因锁被跳过。
+        for (const plan of plans) {
+            if (running) return;
+            await execute(plan, true);
+        }
     }
 
     function abortable(promise, signal) {
@@ -756,18 +878,77 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             console.error(error);
             return status("errors.invalidCandidate");
         }
+        const masterSeed = window.crypto.getRandomValues(new Uint32Array(1))[0];
+        // 计划包含运行所需的全部输入，同时作为检查点：页面关闭后按同一计划重放，已完成的 seed 直接取缓存。
+        await execute({
+            id: `${Date.now().toString(36)}-${masterSeed.toString(36)}`,
+            kind: scan ? "scan" : equipmentRun ? "upgrades" : "triggers",
+            createdAt: Date.now(),
+            settings, scanVariables, masterSeed, teams,
+            originalTeamState: cloneTeamState(originalTeamState),
+            draftTeamState: cloneTeamState(draftTeamState),
+            activeIds: [...activeIds],
+        }, false);
+    }
+
+    // 同一计划只允许一个标签页执行；非安全上下文没有 Web Locks，此时无法防止多标签页重复续跑。
+    function withRunLock(id, work) {
+        if (!navigator.locks) return work().then(() => true);
+        return navigator.locks.request(`mwi-optimizer:${id}`, { ifAvailable: true }, async (lock) => {
+            if (!lock) return false;
+            await work();
+            return true;
+        });
+    }
+
+    function persist(promise) {
+        promise.catch((error) => console.error("优化器持久化失败", error));
+    }
+
+    async function execute(plan, resumed) {
+        if (running) return false;
+        running = true;
+        const acquired = await withRunLock(plan.id, () => executeLocked(plan, resumed)).catch((error) => {
+            console.error(error);
+            return false;
+        });
+        if (!acquired) running = false;
+        return acquired;
+    }
+
+    async function executeLocked(plan, resumed) {
+        const { settings, scanVariables, masterSeed } = plan;
+        const scan = plan.kind === "scan";
+        const equipmentRun = plan.kind === "upgrades";
+        const baselineTeam = plan.originalTeamState;
+        let teams = plan.teams;
         resetResults();
         controller = new AbortController();
         const signal = controller.signal;
         setRunning(true);
         setProgress(0);
-        const masterSeed = window.crypto.getRandomValues(new Uint32Array(1))[0];
         const seeds = seedList(masterSeed, settings.seedCount);
-        report = { settings, masterSeed, seeds, originalTeamState: cloneTeamState(originalTeamState), draftTeamState: cloneTeamState(draftTeamState), baselineSamples: [], results, scan: null, status: "running" };
+        report = {
+            id: plan.id, kind: plan.kind, createdAt: plan.createdAt, activeIds: plan.activeIds,
+            settings, masterSeed, seeds, originalTeamState: cloneTeamState(baselineTeam), draftTeamState: cloneTeamState(plan.draftTeamState),
+            baselineSamples: [], results, scan: null, status: "running", resumed,
+        };
         updateActions();
+        let memo = new Map();
+        try {
+            if (resumed) {
+                memo = await loadSamples(plan.id);
+            } else {
+                await saveRun(plan);
+            }
+        } catch (error) {
+            // 存储不可用时照常运行，只是关闭页面后无法续跑。
+            console.error(error);
+            report.persistenceError = String(error);
+        }
+        status(resumed ? "status.resumed" : "status.pricing", resumed ? { done: memo.size } : undefined);
         try {
             runner = new EvaluationRunner({ concurrency: settings.concurrency });
-            status("status.pricing");
             let prices;
             try {
                 prices = await abortable(getPrices(), signal);
@@ -783,25 +964,48 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 ? seedList(masterSeed, settings.seedCount * 2).slice(settings.seedCount)
                 : seeds;
             report.validationSeeds = validationSeeds;
-            const evaluateBatch = (teamStates, { start, width, exploration = false, onResult }) => runner.evaluateBatch(
-                teamStates.map((teamState) => ({
-                    players: teamStateToDTOs(teamState),
-                    dungeonCount: exploration ? settings.searchDungeonCount : settings.dungeonCount,
-                    seeds: exploration ? seeds : validationSeeds,
-                })), {
-                    zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels, signal, onResult,
+            // 已缓存的 seed 不再模拟；搜索只依赖样本，重放同一计划会走出完全相同的路径。
+            const evaluateBatch = async (teamStates, { start, width, exploration = false, onResult }) => {
+                const dungeonCount = exploration ? settings.searchDungeonCount : settings.dungeonCount;
+                const jobSeeds = exploration ? seeds : validationSeeds;
+                const jobs = teamStates.map((teamState) => {
+                    const players = teamStateToDTOs(teamState);
+                    const key = jobKey({ players, dungeonCount });
+                    return { players, key, samples: jobSeeds.map((seed) => memo.get(`${key}|${seed}`) ?? null) };
+                });
+                const output = jobs.map((job) => job.samples.every(Boolean) ? job.samples : null);
+                output.forEach((samples, index) => { if (samples) onResult?.(index, samples); });
+                const pending = jobs.map((job, index) => ({ job, index, seeds: jobSeeds.filter((_, position) => !job.samples[position]) }))
+                    .filter((entry) => entry.seeds.length);
+                if (!pending.length) return output;
+                await runner.evaluateBatch(pending.map(({ job, seeds: missing }) => ({ players: job.players, dungeonCount, seeds: missing })), {
+                    zone: settings.zone, extra: settings.extra, guildShrineLevels: settings.guildShrineLevels, signal,
+                    onSample: (position, seedIndex, sample) => {
+                        const { job, seeds: missing } = pending[position];
+                        const seed = missing[seedIndex];
+                        memo.set(`${job.key}|${seed}`, sample);
+                        job.samples[jobSeeds.indexOf(seed)] = sample;
+                        if (!report.persistenceError) persist(saveSample(plan.id, job.key, seed, sample));
+                    },
+                    onResult: (position) => {
+                        const { job, index } = pending[position];
+                        output[index] = job.samples;
+                        onResult?.(index, job.samples);
+                    },
                     onProgress: ({ finished, total, progress }) => {
                         status("status.running", { done: finished, total });
                         setProgress(start + width * (Number.isFinite(progress) ? progress : finished / total));
                     },
                 });
+                return output;
+            };
             let pairedStart = 0;
             if (scan) {
                 let evaluations = 0;
                 report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, stopReason: "running" };
                 updateActions();
                 const search = await scanThresholds({
-                    teamState: cloneTeamState(draftTeamState), variables: scanVariables,
+                    teamState: cloneTeamState(plan.draftTeamState), variables: scanVariables,
                     evaluateBatch: (teamStates, onResult) => evaluateBatch(teamStates, {
                         start: 80 * evaluations / settings.maxEvaluations,
                         width: 80 * teamStates.length / settings.maxEvaluations,
@@ -819,14 +1023,19 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 });
                 signal.throwIfAborted();
                 report.scan = { ...search, variables: scanVariables };
-                draftTeamState = cloneTeamState(search.bestTeamState);
-                teams = [cloneTeamState(draftTeamState)];
+                report.draftTeamState = cloneTeamState(search.bestTeamState);
+                teams = [cloneTeamState(search.bestTeamState)];
+                // 仍是同一批参战队员时，把最优阈值带回触发条件页继续编辑。
+                if (plan.activeIds.join() === activeIds.join()) {
+                    draftTeamState = cloneTeamState(search.bestTeamState);
+                    renderTriggers();
+                }
                 pairedStart = 80;
             }
             // 最终验证用未参与搜索的 seed，避免把搜索择优偏差当成可靠收益。
             // 原方案与全部候选整批并行；候选结果按顺序在原方案完成后逐个展示。
             const draftChanges = equipmentRun ? changesBetween(report.originalTeamState, report.draftTeamState) : [];
-            const batch = [originalTeamState, ...teams];
+            const batch = [baselineTeam, ...teams];
             const completed = new Array(batch.length);
             let shown = 0;
             const flush = () => {
@@ -836,7 +1045,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                 while (shown < teams.length && completed[shown + 1]) {
                     const teamState = teams[shown];
                     const samples = completed[shown + 1];
-                    const changes = changesBetween(originalTeamState, teamState);
+                    const changes = changesBetween(baselineTeam, teamState);
                     results.push({
                         teamState, changes, samples, comparison: comparePaired(baselineSamples, samples),
                         candidateChanges: equipmentRun ? changesBetween(report.draftTeamState, teamState) : changes,
@@ -857,7 +1066,6 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             });
             signal.throwIfAborted();
             flush();
-            report.draftTeamState = cloneTeamState(draftTeamState);
             report.status = "done";
             status(report.scan?.truncated ? "scanTruncated" : "status.done");
             setProgress(100);
@@ -874,7 +1082,14 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             runner = null;
             controller = null;
             setRunning(false);
-            if (scan) renderTriggers();
+            // 走到这里说明运行已结束（完成、手动中止或失败）；页面被关闭时不会执行，检查点保留以便续跑。
+            report.finishedAt = Date.now();
+            const finished = report;
+            // 报告保存失败（例如配额不足）也要删检查点，否则每次打开页面都会重放一轮已结束的运行。
+            persist(saveReport(finished)
+                .catch((error) => console.error("优化器报告保存失败", error))
+                .then(() => deleteRun(plan.id))
+                .then(renderHistory));
             if (results.length || report.scan) {
                 renderResults();
                 showResults();
@@ -883,12 +1098,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         }
     }
 
-    modal.addEventListener("show.bs.modal", (event) => {
-        if (running) {
-            event.preventDefault();
-            status("errors.running");
-            return;
-        }
+    // 载入主界面当前队伍到草稿；不动结果区，运行中的报告和已恢复的报告都要保留。
+    function loadSnapshot() {
         try {
             snapshot = getTeamSnapshot();
             rosterOriginal = cloneTeamState(snapshot.teamState);
@@ -900,7 +1111,6 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             syncActiveTeams();
             candidates = [];
             variables.clear();
-            resetResults();
             ui.optSelectDungeon.replaceChildren();
             for (const hrid of snapshot.dungeonOrder) {
                 if (!hrid) continue;
@@ -915,14 +1125,10 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             ui.optInputParallelCount.value = String(snapshot.parallelCount);
             ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value;
             updateMemoryEstimate();
-            ui.optProgress.classList.add("d-none");
             renderParticipants();
             renderTriggers();
             renderEquipment();
-            mode = "triggers";
-            window.bootstrap.Tab.getOrCreateInstance(ui.optTabTriggers).show();
-            status(draftTeamState.players.length ? "status.ready" : "errors.noTeam");
-            translate();
+            return true;
         } catch (error) {
             console.error(error);
             snapshot = null;
@@ -932,22 +1138,51 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             rosterDraft = null;
             activeIds = [];
             ui.optParticipants.replaceChildren();
-            resetResults();
             ui.optTriggerContainer.replaceChildren();
             ui.optCandidateList.replaceChildren();
-            status("status.error");
+            return false;
         }
+    }
+
+    modal.addEventListener("show.bs.modal", () => {
+        void renderHistory();
+        if (running) {
+            // 运行在后台继续：页面刷新后自动续跑时尚未载入过主界面队伍，这里补上以便查看与后续编辑。
+            if (!snapshot) loadSnapshot();
+            showResults();
+            updateActions();
+            translate();
+            return;
+        }
+        const loaded = loadSnapshot();
+        mode = "triggers";
+        ui.optProgress.classList.add("d-none");
+        // 默认打开上一轮结果：本次会话的报告仍在内存里；否则从浏览器存储恢复最近一份。
+        if (report) {
+            renderResults();
+            showResults();
+        } else {
+            window.bootstrap.Tab.getOrCreateInstance(ui.optTabTriggers).show();
+            void restoreLatest();
+        }
+        status(!loaded ? "status.error" : draftTeamState.players.length ? "status.ready" : "errors.noTeam");
         updateActions();
+        translate();
     });
 
-    modal.addEventListener("hide.bs.modal", (event) => {
-        if (running) {
-            event.preventDefault();
-            status("errors.running");
-        }
-    });
     ui.optTabTriggers.addEventListener("shown.bs.tab", () => { mode = "triggers"; });
     ui.optTabUpgrades.addEventListener("shown.bs.tab", () => { mode = "upgrades"; });
+    ui.optButtonClearHistory.addEventListener("click", async () => {
+        if (!window.confirm(t("history.confirmClear"))) return;
+        try {
+            await clearReports();
+        } catch (error) {
+            console.error(error);
+            return status("status.error");
+        }
+        if (!running) resetResults();
+        void renderHistory();
+    });
     ui.optInputParallelCount.addEventListener("input", () => {
         ui.optParallelCountDisplay.textContent = ui.optInputParallelCount.value;
         updateMemoryEstimate();
@@ -961,7 +1196,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     // 结果区与候选列表把词条、编号和本地化数字混排在同一行，逐节点替换靠不住，
     // 语言切换后整体重建；选中的候选由 selectedTeamState 保持，不会被重置。
     window.i18next?.on?.("languageChanged", () => {
-        if (results.length || report?.scan) renderResults();
+        if (report) renderResults();
+        void renderHistory();
         if (draftTeamState) renderCandidates();
         updateScanEstimate();
     });
@@ -983,7 +1219,8 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         if (!teamState?.players.length) return status("errors.noTeam");
         if (!validTriggers(teamState)) return status("errors.invalidTriggers");
         try {
-            applyTeamSnapshot(cloneTeamState(teamState), [...activeIds]);
+            // 选中的是历史报告里的候选时，按那一轮的参战名单回写主界面。
+            applyTeamSnapshot(cloneTeamState(teamState), selectedTeamState && report?.activeIds ? [...report.activeIds] : [...activeIds]);
             status("applied");
         } catch (error) {
             console.error(error);
@@ -1003,4 +1240,5 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
         status("exported");
     });
     updateActions();
+    void resumePending();
 }

@@ -6,6 +6,33 @@
         "applied": "Simulation configuration applied",
         "exported": "Report exported",
         "open": "Team Optimizer",
+        "runningBadge": "Optimizer running",
+        "history": {
+            "note": "The last 20 finished, stopped or failed runs are kept in this browser.",
+            "clear": "Clear history",
+            "confirmClear": "Clear all optimizer history? This cannot be undone.",
+            "empty": "No history yet.",
+            "unavailable": "Browser storage is unavailable; history cannot be read.",
+            "view": "View",
+            "delete": "Delete",
+            "current": "Shown",
+            "shownRun": "Showing run:",
+            "resumed": "Resumed after reload",
+            "delta": "Team DPS change {{delta}}, 95% interval [{{low}}, {{high}}]",
+            "candidates": "{{count}} candidates",
+            "evaluations": "{{count}} exploration evaluations",
+            "kinds": {
+                "scan": "Threshold auto-tune",
+                "triggers": "Triggers",
+                "upgrades": "Equipment upgrades"
+            },
+            "statuses": {
+                "done": "Done",
+                "stopped": "Stopped",
+                "error": "Failed",
+                "running": "Unfinished"
+            }
+        },
         "settings": "Simulation Settings",
         "dungeon": "Dungeon",
         "difficulty": "Difficulty",
@@ -74,7 +101,8 @@
         "tabs": {
             "triggers": "Triggers",
             "upgrades": "Equipment upgrades",
-            "results": "Results"
+            "results": "Results",
+            "history": "History"
         },
         "run": "Start Simulation",
         "scan": "Auto-tune thresholds",
@@ -108,7 +136,8 @@
             "done": "Simulation complete",
             "stopped": "Simulation stopped",
             "error": "Simulation failed",
-            "pricing": "Loading prices"
+            "pricing": "Loading prices",
+            "resumed": "Resumed the unfinished run; reusing {{done}} completed seed results"
         },
         "result": {
             "baseline": "Baseline",
@@ -153,6 +182,7 @@
             "noVariables": "Tick at least one condition to auto-tune.",
             "noCandidate": "Add or select a candidate first.",
             "running": "A simulation is already running.",
+            "rosterMismatch": "This report's players are not in the current roster, so it cannot be loaded.",
             "invalidSettings": "Enter valid positive integer settings and valid threshold ranges.",
             "invalidCandidate": "The candidate configuration is invalid."
         }

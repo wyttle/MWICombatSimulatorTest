@@ -4925,27 +4925,10 @@ darkModeToggle.addEventListener('change', () => {
     localStorage.setItem('darkModeEnabled', darkModeToggle.checked);
 });
 
+// 统一走 js/i18n.js 的翻译器：它会解析 data-i18n-options，保留「玩家 1」等插值文案。
+// i18next 初始化前尚未挂载，此时跳过；初始化回调会再完整翻译一遍页面。
 function updateContent() {
-    document.querySelectorAll('[data-i18n]').forEach(function (element) {
-        const key = element.getAttribute('data-i18n');
-        if (key) {
-            element.textContent = i18next.t(key);
-        }
-    });
-
-    document.querySelectorAll('[data-i18n-placeholder]').forEach(function (element) {
-        const key = element.getAttribute('data-i18n-placeholder');
-        if (key) {
-            element.placeholder = i18next.t(key);
-        }
-    });
-
-    document.querySelectorAll('option[data-i18n]').forEach(function (element) {
-        const key = element.getAttribute('data-i18n');
-        if (key) {
-            element.textContent = i18next.t(key);
-        }
-    });
+    window.updateContent?.();
 }
 
 initEquipmentSection();
