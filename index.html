@@ -1466,6 +1466,16 @@
                                 </div>
                             </div>
                             <div class="row mb-1">
+                                <label for="optSelectSearchMethod" class="col-md-3 col-form-label" data-i18n="common:optimizer.searchMethod">Search algorithm</label>
+                                <div class="col-md">
+                                    <select id="optSelectSearchMethod" class="form-select">
+                                        <option value="bayes" data-i18n="common:optimizer.searchMethods.bayes">Bayesian optimization (joint)</option>
+                                        <option value="coordinate" data-i18n="common:optimizer.searchMethods.coordinate">Coordinate search (one at a time)</option>
+                                    </select>
+                                    <small class="text-muted" data-i18n="common:optimizer.searchMethodHint">Bayesian optimization models all selected thresholds together and can change several at once, so it finds combinations that only help when changed together. Coordinate search moves one threshold at a time.</small>
+                                </div>
+                            </div>
+                            <div class="row mb-1">
                                 <label for="optInputMaxEvaluations" class="col-md-3 col-form-label" data-i18n="common:optimizer.maxEvaluations">Maximum evaluations</label>
                                 <div class="col-md">
                                     <input type="number" id="optInputMaxEvaluations" class="form-control" min="5" max="500" value="60" required />

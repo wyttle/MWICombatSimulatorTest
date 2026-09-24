@@ -223,6 +223,58 @@ async function main() {
             if (index !== context.variableIndex) assert.equal(point.values[index], context.values[index], "不得混画不同配置背景");
         }
     }
+
+    // 6c. 贝叶斯优化：单独改任一阈值都变差、一起改才变好时，必须找到联动组合；坐标搜索在此必然失败。
+    const { optimizeThresholds, batchSizeFor } = await import("./src/optimizer/bayes.js");
+    const jointSeeds = [5, 6, 7, 8];
+    const jointVariables = [0, 1, 2].map((index) => ({ playerId: String(index + 1), abilityHrid: "/abilities/test", triggerIndex: 0, min: 0, max: 10000, step: 100 }));
+    const jointDps = ([a, b, c]) => {
+        const inA = a >= 3000 && a <= 6000;
+        const inB = b >= 3000 && b <= 6000;
+        return 100 + (inA && inB ? 6 : 0) - (inA !== inB ? 1 : 0) + Math.exp(-(((c - 7000) / 2000) ** 2));
+    };
+    const jointRun = async ({ reverse = false, batchSize = 4 } = {}) => {
+        const seen = new Set();
+        const batches = [];
+        const evaluate = batchOf(async (state) => {
+            const values = state.players.map((player) => player.state.triggerMap["/abilities/test"][0].value);
+            const key = JSON.stringify(values);
+            assert.ok(!seen.has(key), "同一完整配置不得重复模拟");
+            seen.add(key);
+            assert.ok(values.every((value) => value % 100 === 0 && value >= 0 && value <= 10000), `候选必须落在用户网格上：${key}`);
+            // seed 间有共同噪声，配对差值里被抵消，模拟真实数据的结构。
+            return jointSeeds.map((seed) => ({ seed, dps: jointDps(values) + (seed % 3) * 2, completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12 }));
+        }, { reverse });
+        const result = await optimizeThresholds({
+            teamState: syntheticTeam([0, 0, 0]), variables: jointVariables, seeds: jointSeeds, maxEvaluations: 60, batchSize,
+            evaluateBatch: (states, onResult) => {
+                batches.push(states.length);
+                return evaluate(states, onResult);
+            },
+        });
+        return { result, batches, simulated: seen.size };
+    };
+    const joint = await jointRun();
+    assert.ok(jointDps(joint.result.bestValues) - jointDps([0, 0, 0]) > 5, `必须找到联动区，实际 ${joint.result.bestValues}`);
+    assert.deepEqual(joint.result.history[0].values, [0, 0, 0], "第一条记录必须是原始配置");
+    assert.ok(joint.result.evaluations <= 60 && joint.simulated === joint.result.evaluations, "不得超出预算，每次评估都要可追溯");
+    // 基线和初始设计不依赖模型，整批提交；之后按模型选点，每批不得超过 batchSize。
+    assert.ok(joint.batches.length > 3 && joint.batches.slice(2).every((size) => size <= 4), `每批配置数不得超过 batchSize：${joint.batches}`);
+    assert.ok(joint.result.modelSlices.every((slice) => slice.points.every((point) => Number.isFinite(point.mean) && point.sd >= 0)), "模型切片必须是有限值");
+    const jointCoordinate = await scanThresholds({
+        teamState: syntheticTeam([0, 0, 0]), variables: jointVariables, seeds: jointSeeds, maxEvaluations: 60,
+        evaluateBatch: batchOf(async (state) => {
+            const values = state.players.map((player) => player.state.triggerMap["/abilities/test"][0].value);
+            return jointSeeds.map((seed) => ({ seed, dps: jointDps(values), completed: 1, failed: 0, deaths: 0, simulatedTime: 3.6e12 }));
+        }),
+    });
+    assert.ok(jointDps(jointCoordinate.bestValues) - jointDps([0, 0, 0]) < 5, "对照：坐标搜索找不到联动区，否则这个用例测不出区别");
+    // 续跑靠重放：乱序完成必须走出完全相同的路径。
+    const jointShuffled = await jointRun({ reverse: true });
+    assert.deepEqual(jointShuffled.result.history.map((entry) => entry.values), joint.result.history.map((entry) => entry.values), "乱序完成不得改变贝叶斯优化的选点");
+    assert.deepEqual(jointShuffled.result.bestValues, joint.result.bestValues);
+    assert.equal(batchSizeFor(15, 16), 6, "15 线程 × 16 seed 时一批 6 个配置，线程利用率才能过 90%");
+    assert.equal(batchSizeFor(16, 16), 1);
     const teamFile = process.argv[2];
     if (!teamFile) {
         console.log("随机源、统计、成本校验通过（未提供队伍文件，跳过端到端评估）。");

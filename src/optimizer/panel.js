@@ -6,6 +6,7 @@ import { comparePaired, seedList } from "./stats.js";
 import { priceChanges, priceConsumableDelta } from "./cost.js";
 import { listEquipmentCandidates, buildChange, applyChanges, validateChanges, generateUpgradeCandidates } from "./candidates.js";
 import { scanThresholds, estimateScanBudget } from "./search.js";
+import { optimizeThresholds, estimateBayesBudget, batchSizeFor } from "./bayes.js";
 import { WORKER_PEAK_MB } from "../workerBudget.js";
 import { resolveScanVariables } from "./ranges.js";
 import { renderSearchAnalysis } from "./searchPlot.js";
@@ -18,6 +19,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     const ui = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
     ui.optInputSearchCount = document.getElementById("optInputSearchCount");
     ui.optRunningBadge = document.getElementById("optRunningBadge");
+    ui.optSelectSearchMethod = document.getElementById("optSelectSearchMethod");
     const modal = ui.optimizerModal;
     let snapshot = null;
     let originalTeamState = null;
@@ -494,6 +496,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             searchDungeonCount: Math.min(integer(ui.optInputSearchCount), integer(ui.optInputDungeonCount)),
             seedCount: integer(ui.optInputSeedCount),
             maxEvaluations: integer(ui.optInputMaxEvaluations),
+            searchMethod: ui.optSelectSearchMethod.value === "coordinate" ? "coordinate" : "bayes",
             extra: structuredClone(snapshot.extra),
             guildShrineLevels: structuredClone(snapshot.guildShrineLevels),
         };
@@ -528,13 +531,14 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             // 区间填到一半是常态，等填完再估。
             active = [];
         }
-        const budget = estimateScanBudget(active);
+        const bayes = ui.optSelectSearchMethod.value !== "coordinate";
+        const budget = bayes ? estimateBayesBudget(active) : estimateScanBudget(active);
         if (!budget) return ui.optScanEstimate.replaceChildren();
         const runs = budget * Number(ui.optInputSeedCount.value) * Math.min(Number(ui.optInputSearchCount.value), Number(ui.optInputDungeonCount.value));
         // 估算值可能超过输入框允许的上限；此时填满上限，提示里仍给出真实需求，让截断可预期。
         const cap = Number(ui.optInputMaxEvaluations.max) || budget;
         if (!budgetTouched) ui.optInputMaxEvaluations.value = String(Math.min(budget, cap));
-        ui.optScanEstimate.replaceChildren(label("scanEstimate", "", {
+        ui.optScanEstimate.replaceChildren(label(bayes ? "scanEstimateBayes" : "scanEstimate", "", {
             thresholds: format(active.length, 0),
             evaluations: format(budget, 0),
             runs: Number.isFinite(runs) ? format(runs, 0) : t("result.unavailable"),
@@ -1002,9 +1006,11 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
             let pairedStart = 0;
             if (scan) {
                 let evaluations = 0;
-                report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, stopReason: "running" };
+                // 旧版检查点没有 searchMethod，续跑时按坐标搜索重放才能命中缓存样本。
+                const bayes = settings.searchMethod === "bayes";
+                report.scan = { variables: scanVariables, history: [], contexts: [], curve: [], alternatives: [], evaluations: 0, stopReason: "running", ...(bayes ? { method: "bayes", modelSlices: [] } : {}) };
                 updateActions();
-                const search = await scanThresholds({
+                const search = await (bayes ? optimizeThresholds : scanThresholds)({
                     teamState: cloneTeamState(plan.draftTeamState), variables: scanVariables,
                     evaluateBatch: (teamStates, onResult) => evaluateBatch(teamStates, {
                         start: 80 * evaluations / settings.maxEvaluations,
@@ -1012,6 +1018,7 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
                         exploration: true, onResult,
                     }),
                     seeds, maxEvaluations: settings.maxEvaluations, signal,
+                    batchSize: batchSizeFor(settings.concurrency, settings.seedCount),
                     onProgress: (progress) => {
                         evaluations = progress.evaluations;
                         report.scan.evaluations = evaluations;
@@ -1189,6 +1196,10 @@ export function initOptimizer({ getTeamSnapshot, applyTeamSnapshot, getPrices })
     });
     ui.optInputMaxEvaluations.addEventListener("input", () => { budgetTouched = true; });
     ui.optInputSeedCount.addEventListener("input", updateScanEstimate);
+    ui.optSelectSearchMethod.addEventListener("change", () => {
+        budgetTouched = false;
+        updateScanEstimate();
+    });
     ui.optInputDungeonCount.addEventListener("input", updateScanEstimate);
     ui.optInputSearchCount.addEventListener("input", updateScanEstimate);
     ui.optSelectDungeon.addEventListener("change", updateScanEstimate);

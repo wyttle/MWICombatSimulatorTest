@@ -15,6 +15,15 @@ const SEARCH_ANALYSIS_TEXT = {
     chartHelp: "Whiskers show paired 95% confidence intervals when available. Dashed segments only link sampled points within this context. Axis scales are shared across contexts of the selected variable. Focus, hover, or select a point for exact values.",
     noPoints: "No finite sampled points in this context.",
     noContexts: "No coordinate-search contexts were recorded.",
+    modelCaveat: "This Gaussian-process curve estimates ΔDPS through the selected configuration with all other thresholds fixed. The shaded 95% band represents model uncertainty, not measurements; only overlaid points are measured. Unexplored regions have wider bands. Use this view to judge peak locations and multiple modes, not as validation.",
+    modelChart: "Gaussian-process threshold slice with model uncertainty and measured paired intervals",
+    modelHelp: "The solid line is the model mean; shading is mean ± 1.96 standard deviations. Overlaid points and their paired 95% intervals are measured configurations with exactly these fixed thresholds. The diamond marks the selected best threshold. Focus, hover, or select a point for exact values.",
+    noModelSlice: "No finite model slice is available for this variable.",
+    posteriorEstimate: "Model estimate ΔDPS: {{mean}}; model standard deviation: {{sd}}",
+    bestValue: "Selected best threshold: {{value}}",
+    axisScale: "Threshold axis scale",
+    linearScale: "Linear",
+    logScale: "Log-like (signed log1p)",
     point: "Value: {{value}}; ΔDPS: {{delta}}; 95% CI: {{interval}}; samples: {{samples}}; evaluation: {{id}}; configuration: {{config}}",
     alternatives: "Alternative configurations (up to 5)",
     searchOnly: "Ranked by mean search DPS. These configurations reuse search samples and have not been independently validated.",
@@ -65,7 +74,7 @@ function pointValue(entry) {
     return entry.value ?? entry.values?.[entry.variableIndex];
 }
 
-function extent(values, includeZero = false) {
+function extent(values, includeZero = false, paddingRatio = 0.06) {
     let low = includeZero ? 0 : Infinity;
     let high = includeZero ? 0 : -Infinity;
     for (const value of values) {
@@ -74,8 +83,30 @@ function extent(values, includeZero = false) {
         high = Math.max(high, value);
     }
     if (!Number.isFinite(low)) return [0, 1];
-    const padding = low === high ? Math.max(Math.abs(low) * 0.05, 1) : (high - low) * 0.06;
+    const padding = low === high ? Math.max(Math.abs(low) * 0.05, 1) : (high - low) * paddingRatio;
     return [low - padding, high + padding];
+}
+
+function linearTicks([low, high]) {
+    const targetStep = (high - low) / 6;
+    const magnitude = 10 ** Math.floor(Math.log10(targetStep));
+    const fraction = targetStep / magnitude;
+    const step = (fraction < 1.5 ? 1 : fraction < 3.5 ? 2 : fraction < 7.5 ? 5 : 10) * magnitude;
+    const values = [];
+    // 按整数序号生成刻度，避免反复相加造成浮点误差与负零。
+    for (let index = Math.ceil(low / step); index <= Math.floor(high / step); index++) values.push(index * step);
+    return { values, digits: Math.min(10, Math.max(0, -Math.floor(Math.log10(step)))) };
+}
+
+function logTicks([low, high]) {
+    const values = low <= 0 && high >= 0 ? [0] : [];
+    const limit = Math.max(Math.abs(low), Math.abs(high));
+    for (let exponent = 0; exponent <= Math.floor(Math.log10(limit)); exponent++) {
+        const value = 10 ** exponent;
+        if (-value >= low && -value <= high) values.push(-value);
+        if (value >= low && value <= high) values.push(value);
+    }
+    return values.length >= 2 ? { values: values.sort((a, b) => a - b), digits: 0 } : linearTicks([low, high]);
 }
 
 export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName, playerName }) {
@@ -89,7 +120,16 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     const label = (tag, className, key, options) => translated(element(tag, className), key, options);
     const svgLabel = (tag, attributes, key, options) => translated(svgElement(tag, attributes), key, options);
     const exact = (value) => Number.isFinite(value) ? String(value) : text("unavailable");
-    const tick = (value) => value === 0 ? "0" : Number(value.toPrecision(6)).toString();
+    const locale = globalThis.window?.i18next?.language;
+    const formatters = new Map();
+    const format = (value, digits = 2, signed = false) => {
+        if (!Number.isFinite(value)) return text("unavailable");
+        const key = `${digits}:${signed}`;
+        if (!formatters.has(key)) formatters.set(key, new Intl.NumberFormat(locale, { maximumFractionDigits: digits, signDisplay: signed ? "exceptZero" : "auto" }));
+        const scale = 10 ** digits;
+        const rounded = Math.round(value * scale) / scale;
+        return formatters.get(key).format(rounded === 0 ? 0 : rounded);
+    };
     const variableLabel = (index) => {
         const variable = variables[index];
         if (!variable) return text("baseline");
@@ -102,16 +142,25 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     const interval = (comparison) => Number.isFinite(comparison?.ciLow) && Number.isFinite(comparison?.ciHigh)
         ? `[${exact(comparison.ciLow)}, ${exact(comparison.ciHigh)}]` : text("unavailable");
     const history = scan.history ?? [];
+    const isBayes = scan.method === "bayes";
     const contexts = scan.contexts ?? [];
     const points = scan.curve?.length ? scan.curve : history;
     const evaluations = new Map(history.map((entry) => [configurationId(entry), entry.id]));
     const root = element("section", "border rounded p-3 mt-3");
-    root.append(label("h5", "mb-2", "title"), label("p", "small text-muted", "caveat"));
+    root.append(label("h5", "mb-2", "title"), label("p", "small text-muted", isBayes ? "modelCaveat" : "caveat"));
 
     const controls = element("div", "row g-2 mb-2");
     const variableSelect = element("select", "form-select form-select-sm");
     const contextSelect = element("select", "form-select form-select-sm");
-    for (const [key, select] of [["variable", variableSelect], ["context", contextSelect]]) {
+    const scaleSelect = isBayes ? element("select", "form-select form-select-sm optimizer-axis-scale") : null;
+    if (scaleSelect) {
+        for (const [value, key] of [["linear", "linearScale"], ["log-like", "logScale"]]) {
+            const option = label("option", "", key);
+            option.value = value;
+            scaleSelect.append(option);
+        }
+    }
+    for (const [key, select] of [["variable", variableSelect], isBayes ? ["axisScale", scaleSelect] : ["context", contextSelect]]) {
         const wrapper = element("label", "col-md-6");
         wrapper.append(label("span", "d-block small mb-1", key), select);
         controls.append(wrapper);
@@ -124,7 +173,7 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     variableSelect.disabled = !variables.length;
     const fixedValues = element("p", "small text-break mb-2");
     const chartContainer = element("div", "overflow-auto");
-    const chartHelp = label("p", "small text-muted mt-2 mb-1", "chartHelp");
+    const chartHelp = label("p", "small text-muted mt-2 mb-1", isBayes ? "modelHelp" : "chartHelp");
     const pointDetails = element("p", "small text-break mb-3");
     pointDetails.setAttribute("aria-live", "polite");
     root.append(controls, fixedValues, chartContainer, chartHelp, pointDetails);
@@ -133,44 +182,63 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
         chartContainer.replaceChildren();
         pointDetails.textContent = "";
         const variableIndex = Number(variableSelect.value);
-        const context = contexts.find((entry) => String(entry.id) === contextSelect.value && entry.variableIndex === variableIndex);
+        const slice = isBayes ? scan.modelSlices?.find((entry) => entry.variableIndex === variableIndex) : null;
+        const context = isBayes ? slice && { values: slice.fixedValues } : contexts.find((entry) => String(entry.id) === contextSelect.value && entry.variableIndex === variableIndex);
         if (!context) {
             fixedValues.textContent = "";
-            chartContainer.append(label("p", "text-muted", "noContexts"));
+            chartContainer.append(label("p", "text-muted", isBayes ? "noModelSlice" : "noContexts"));
             return;
         }
         const fixed = variables.flatMap((variable, index) => index === variableIndex ? [] : [`${variableLabel(index)} = ${exact(context.values?.[index])}`]);
         translated(fixedValues, "fixedValues", { values: fixed.join("; ") || text("noFixedValues") });
-        const variablePoints = points.filter((entry) => entry.variableIndex === variableIndex && Number.isFinite(pointValue(entry)) && Number.isFinite(entry.comparison?.deltaDps));
-        const selectedPoints = variablePoints.filter((entry) => String(entry.contextId) === String(context.id)).sort((a, b) => pointValue(a) - pointValue(b));
-        if (!selectedPoints.length) {
-            chartContainer.append(label("p", "text-muted", "noPoints"));
+        // 模型切片只叠加其他坐标完全一致的实测点，不能把不同配置投影为可比观测。
+        const modelPoints = (slice?.points ?? []).filter((entry) => Number.isFinite(entry.value) && Number.isFinite(entry.mean) && Number.isFinite(entry.sd) && entry.sd >= 0).sort((a, b) => a.value - b.value);
+        const variablePoints = isBayes
+            ? history.filter((entry) => entry.values?.length === slice.fixedValues.length && slice.fixedValues.every((value, index) => index === variableIndex || entry.values[index] === value))
+                .map((entry) => ({ ...entry, value: entry.values[variableIndex] }))
+                .filter((entry) => Number.isFinite(pointValue(entry)) && Number.isFinite(entry.comparison?.deltaDps))
+            : points.filter((entry) => entry.variableIndex === variableIndex && Number.isFinite(pointValue(entry)) && Number.isFinite(entry.comparison?.deltaDps));
+        const selectedPoints = (isBayes ? variablePoints : variablePoints.filter((entry) => String(entry.contextId) === String(context.id))).sort((a, b) => pointValue(a) - pointValue(b));
+        if (isBayes ? !modelPoints.length : !selectedPoints.length) {
+            chartContainer.append(label("p", "text-muted", isBayes ? "noModelSlice" : "noPoints"));
             return;
         }
         // 同一变量的各背景复用相同坐标轴；仅当前背景内的点允许连线。
-        const xBounds = extent(variablePoints.map(pointValue));
-        const yBounds = extent(variablePoints.flatMap((entry) => [entry.comparison.deltaDps, entry.comparison.ciLow, entry.comparison.ciHigh]), true);
+        const logScale = scaleSelect?.value === "log-like";
+        const transform = (value) => logScale ? Math.sign(value) * Math.log1p(Math.abs(value)) : value;
+        // 对数轴直接使用数据边界，避免变换空间的留白放大为极大的阈值外推。
+        const xValues = variablePoints.map(pointValue);
+        if (isBayes) xValues.push(...modelPoints.map((entry) => entry.value), slice.fixedValues[variableIndex]);
+        const xDomain = extent(xValues, false, isBayes ? 0 : 0.06);
+        const xBounds = xDomain.map(transform);
+        const xTicks = logScale ? logTicks(xDomain) : linearTicks(xDomain);
+        const yValues = variablePoints.flatMap((entry) => [entry.comparison.deltaDps, entry.comparison.ciLow, entry.comparison.ciHigh]);
+        if (isBayes) yValues.push(...modelPoints.flatMap((entry) => [entry.mean - 1.96 * entry.sd, entry.mean + 1.96 * entry.sd]));
+        const yBounds = extent(yValues, true);
+        const yTicks = linearTicks(yBounds);
         const width = 800;
         const height = 370;
         const left = 100;
         const right = width - 30;
         const top = 48;
         const bottom = height - 62;
-        const x = (value) => left + (value - xBounds[0]) / (xBounds[1] - xBounds[0]) * (right - left);
+        const x = (value) => left + (transform(value) - xBounds[0]) / (xBounds[1] - xBounds[0]) * (right - left);
         const y = (value) => bottom - (value - yBounds[0]) / (yBounds[1] - yBounds[0]) * (bottom - top);
-        const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": text("chart") });
+        const chartKey = isBayes ? "modelChart" : "chart";
+        const svg = svgElement("svg", { viewBox: `0 0 ${width} ${height}`, role: "group", "aria-label": text(chartKey) });
+        if (isBayes) svg.setAttribute("class", "optimizer-model-slice");
         svg.style.width = "100%";
         svg.style.minWidth = "560px";
         svg.style.display = "block";
-        svg.append(svgLabel("title", {}, "chart"), svgLabel("text", { x: left, y: 21, fill: "currentColor", "font-size": 13 }, "deltaDps"));
-        for (let index = 0; index <= 4; index++) {
-            const xValue = xBounds[0] + (xBounds[1] - xBounds[0]) * index / 4;
-            const yValue = yBounds[0] + (yBounds[1] - yBounds[0]) * index / 4;
+        svg.append(svgLabel("title", {}, chartKey), svgLabel("text", { x: left, y: 21, fill: "currentColor", "font-size": 13 }, "deltaDps"));
+        for (const yValue of yTicks.values) {
             svg.append(
                 svgElement("line", { x1: left, y1: y(yValue), x2: right, y2: y(yValue), stroke: "currentColor", opacity: 0.15 }),
-                svgElement("text", { x: left - 9, y: y(yValue) + 4, "text-anchor": "end", fill: "currentColor", "font-size": 12 }, tick(yValue)),
-                svgElement("text", { x: x(xValue), y: bottom + 22, "text-anchor": "middle", fill: "currentColor", "font-size": 12 }, tick(xValue)),
+                svgElement("text", { class: "optimizer-y-tick", x: left - 9, y: y(yValue) + 4, "text-anchor": "end", fill: "currentColor", "font-size": 12 }, format(yValue, yTicks.digits)),
             );
+        }
+        for (const xValue of xTicks.values) {
+            svg.append(svgElement("text", { class: "optimizer-x-tick", x: x(xValue), y: bottom + 22, "text-anchor": "middle", fill: "currentColor", "font-size": 12 }, format(xValue, xTicks.digits)));
         }
         svg.append(
             svgElement("line", { x1: left, y1: top, x2: left, y2: bottom, stroke: "currentColor" }),
@@ -178,7 +246,32 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
             svgElement("line", { x1: left, y1: y(0), x2: right, y2: y(0), stroke: "currentColor", "stroke-dasharray": "5 5", opacity: 0.6 }),
             svgLabel("text", { x: (left + right) / 2, y: height - 12, "text-anchor": "middle", fill: "currentColor", "font-size": 13 }, "threshold"),
         );
-        if (selectedPoints.length > 1) {
+        if (isBayes) {
+            const upper = modelPoints.map((entry) => `${x(entry.value)},${y(entry.mean + 1.96 * entry.sd)}`);
+            const lower = modelPoints.map((entry) => `${x(entry.value)},${y(entry.mean - 1.96 * entry.sd)}`).reverse();
+            svg.append(
+                svgElement("polygon", { class: "optimizer-model-band", points: [...upper, ...lower].join(" "), fill: "var(--bs-primary, #0d6efd)", opacity: 0.16 }),
+                svgElement("polyline", {
+                    class: "optimizer-model-mean", points: modelPoints.map((entry) => `${x(entry.value)},${y(entry.mean)}`).join(" "),
+                    fill: "none", stroke: "var(--bs-primary, #0d6efd)", "stroke-width": 2,
+                }),
+            );
+            const bestValue = slice.fixedValues[variableIndex];
+            if (Number.isFinite(bestValue)) {
+                const cx = x(bestValue);
+                const description = text("bestValue", { value: exact(bestValue) });
+                const marker = svgElement("path", {
+                    class: "optimizer-best-threshold", d: `M ${cx} ${bottom - 7} L ${cx + 6} ${bottom} L ${cx} ${bottom + 7} L ${cx - 6} ${bottom} Z`,
+                    fill: "var(--bs-warning, #ffc107)", stroke: "currentColor", tabindex: 0, role: "img", "aria-label": description,
+                });
+                marker.append(svgElement("title", {}, description));
+                const showDetails = () => { pointDetails.textContent = description; };
+                marker.addEventListener("focus", showDetails);
+                marker.addEventListener("pointerenter", showDetails);
+                marker.addEventListener("click", showDetails);
+                svg.append(svgElement("line", { x1: cx, y1: top, x2: cx, y2: bottom, stroke: "currentColor", "stroke-dasharray": "2 5", opacity: 0.5 }), marker);
+            }
+        } else if (selectedPoints.length > 1) {
             svg.append(svgElement("polyline", {
                 points: selectedPoints.map((entry) => `${x(pointValue(entry))},${y(entry.comparison.deltaDps)}`).join(" "),
                 fill: "none", stroke: "var(--bs-primary, #0d6efd)", "stroke-dasharray": "3 4", opacity: 0.6,
@@ -204,6 +297,7 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
                 cx, cy: y(comparison.deltaDps), r: 5, fill: "var(--bs-primary, #0d6efd)",
                 stroke: "currentColor", "stroke-width": 0.5, tabindex: 0, role: "img", "aria-label": description,
             });
+            if (isBayes) dot.setAttribute("class", "optimizer-measured-point");
             dot.append(svgElement("title", {}, description));
             const showDetails = () => { pointDetails.textContent = description; };
             dot.addEventListener("focus", showDetails);
@@ -215,6 +309,12 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     }
 
     function updateContexts() {
+        if (isBayes) {
+            const variable = variables[Number(variableSelect.value)];
+            scaleSelect.value = variable && variable.max / (Math.abs(variable.min) + variable.step) > 50 ? "log-like" : "linear";
+            drawContext();
+            return;
+        }
         contextSelect.replaceChildren();
         const variableIndex = Number(variableSelect.value);
         for (const context of contexts) {
@@ -228,6 +328,7 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
     }
     variableSelect.addEventListener("change", updateContexts);
     contextSelect.addEventListener("change", drawContext);
+    scaleSelect?.addEventListener("change", drawContext);
     updateContexts();
 
     root.append(label("h6", "mt-3", "alternatives"), label("p", "small text-muted", "searchOnly"));
@@ -238,6 +339,9 @@ export function renderSearchAnalysis({ scan, variables, onSelect, t, abilityName
         const comparison = alternative.comparison ?? {};
         row.append(element("div", "text-break", `${text("configuration")}: ${configurationId(alternative)}`));
         row.append(element("div", "mb-2", `${text("candidateDps")}: ${exact(comparison.candidateDps)}; ${text("deltaDps")}: ${exact(comparison.deltaDps)}; ${text("ciLow")}: ${exact(comparison.ciLow)}; ${text("ciHigh")}: ${exact(comparison.ciHigh)}; ${text("samples")}: ${exact(comparison.n)}`));
+        if (Number.isFinite(alternative.posteriorMean) && Number.isFinite(alternative.posteriorSd)) {
+            row.append(label("div", "optimizer-posterior-estimate mb-2", "posteriorEstimate", { mean: format(alternative.posteriorMean, 2, true), sd: format(alternative.posteriorSd) }));
+        }
         const button = label("button", "btn btn-sm btn-outline-primary", "select", { id: alternative.id });
         button.type = "button";
         button.disabled = typeof onSelect !== "function";
