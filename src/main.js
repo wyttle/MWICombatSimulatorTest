@@ -4194,6 +4194,7 @@ function doGroupImport() {
             playerDataMap = groupImport.players;
             setGuildShrineLevels(groupImport.guildShrineLevels);
         } else {
+            // 不是队伍导出格式时立刻报错，否则会把无法解析的数据写进队员列表，之后每次切换标签页都会出错。
             const playerStates = Object.values(groupImport).map((playerJson) => {
                 try {
                     return JSON.parse(playerJson);
@@ -4201,12 +4202,12 @@ function doGroupImport() {
                     return null;
                 }
             });
-            // 不是队伍导出格式时立刻报错，否则会把无法解析的数据写进队员列表，之后每次切换标签页都会出错。
+            const importedGuildShrineLevels = playerStates.find((playerState) => playerState?.guildShrineLevels)?.guildShrineLevels;
             if (!playerStates.length || !playerStates.every((playerState) => playerState?.player)) {
                 throw new Error(i18next.t("common:importInvalidTeam"));
             }
             playerDataMap = groupImport;
-            setGuildShrineLevels(playerStates.find((playerState) => playerState.guildShrineLevels)?.guildShrineLevels);
+            setGuildShrineLevels(importedGuildShrineLevels);
         }
         needUpdateCurrentTab = true;
     }
